@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+
+members = [
+    "crates/dvs-app",
+    "crates/dvs-core",
+    "crates/dvs-ui",
+    "crates/dvs-media",
+    "crates/dvs-decoder",
+    "crates/dvs-playback",
+    "crates/dvs-gpu",
+    "crates/dvs-render",
+    "crates/dvs-audio",
+    "crates/dvs-cache",
+    "crates/dvs-project",
+    "crates/dvs-export",
+    "crates/dvs-ai",
+]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "Proprietary"
+authors = ["Hugo Do Vale"]
+
+[workspace.dependencies]
