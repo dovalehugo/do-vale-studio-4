@@ -464,6 +464,11 @@ version = "0.1.0"
 [[package]]
 name = "dvs-gpu"
 version = "0.1.0"
+dependencies = [
+ "raw-window-handle",
+ "thiserror 2.0.20",
+ "wgpu",
+]
 
 [[package]]
 name = "dvs-media"

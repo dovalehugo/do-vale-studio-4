@@ -21,12 +21,13 @@
 - [x] GPU texture pipeline / NV12 shader path (Experiment 1 — `tests/gpu_nv12`)
 - [x] Windows D3D11VA → wgpu interop (Experiment 2 — `tests/gpu_d3d11_interop`)
 - [x] Integration 0 — dependency graph wiring (compile-time only; no production API)
-- [ ] Production crate extraction (Integrations 2–8)
+- [x] Integration 2 — `dvs-gpu` safe DX12 context, adapter identity, `FenceTimeline`
+- [ ] Production crate extraction (Integrations 3–8)
 - [ ] FFmpeg integration (`dvs-decoder`)
 - [ ] Media probing (`dvs-media`)
 - [ ] Hardware decoder detection (production)
 - [x] VideoFrame / metadata abstraction (`dvs-media`)
-- [ ] GPU frame abstraction (`dvs-gpu`)
+- [ ] GPU frame abstraction (`dvs-gpu`) — LUID, interop bridge, shared handles pending (Integration 3+)
 - [ ] GPU scaling (production viewport)
 - [ ] Native video viewport (`dvs-app`)
 
