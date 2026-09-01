@@ -149,4 +149,60 @@ pub enum GpuError {
     #[cfg(target_os = "windows")]
     #[error("D3D11 CopySubresourceRegion failed")]
     D3d11CopySubresourceFailed(#[source] windows::core::Error),
+
+    /// `GpuContext` does not contain a captured DXGI adapter LUID.
+    #[error("GpuContext is missing DXGI adapter LUID")]
+    MissingContextDxgiLuid,
+
+    /// D3D12 `OpenSharedHandle` failed for the shared NV12 texture.
+    #[cfg(target_os = "windows")]
+    #[error("D3D12 texture OpenSharedHandle failed")]
+    D3d12TextureOpenFailed(#[source] windows::core::Error),
+
+    /// D3D12 `OpenSharedHandle` failed for the shared fence.
+    #[cfg(target_os = "windows")]
+    #[error("D3D12 fence OpenSharedHandle failed")]
+    D3d12FenceOpenFailed(#[source] windows::core::Error),
+
+    /// Imported D3D12 resource descriptor does not match the producer allocation.
+    #[error("imported D3D12 resource descriptor mismatch")]
+    ImportedResourceDescriptorMismatch,
+
+    /// wgpu-hal failed to wrap the imported D3D12 resource.
+    #[error("wgpu-hal DX12 texture wrap failed")]
+    HalTextureWrapFailed,
+
+    /// wgpu failed to create an external texture from the HAL wrapper.
+    #[error("wgpu external texture creation failed")]
+    WgpuExternalTextureCreationFailed,
+
+    /// wgpu raw queue `Wait` failed.
+    #[cfg(target_os = "windows")]
+    #[error("wgpu raw queue Wait failed")]
+    WgpuRawQueueWaitFailed(#[source] windows::core::Error),
+
+    /// wgpu raw queue `Signal` failed.
+    #[cfg(target_os = "windows")]
+    #[error("wgpu raw queue Signal failed")]
+    WgpuRawQueueSignalFailed(#[source] windows::core::Error),
+
+    /// A frame is already prepared and awaiting consumed signal.
+    #[error("interop bridge already has a prepared frame")]
+    InteropFrameAlreadyPrepared,
+
+    /// No prepared frame is available to signal consumed.
+    #[error("interop bridge has no prepared frame")]
+    InteropNoPreparedFrame,
+
+    /// Consumed signal values do not match the prepared frame.
+    #[error("interop fence values mismatch")]
+    InteropFenceValuesMismatch,
+
+    /// Interop bridge is poisoned after a synchronization failure.
+    #[error("interop bridge is poisoned")]
+    InteropBridgePoisoned,
+
+    /// A shared handle was opened more than once per bridge lifetime.
+    #[error("shared handle opened more than once")]
+    SharedHandleOpenedMoreThanOnce,
 }

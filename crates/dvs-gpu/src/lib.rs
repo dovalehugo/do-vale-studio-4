@@ -3,7 +3,8 @@
 //! Integration 2 provides safe DX12 bootstrap, public adapter identity, typed errors,
 //! and monotonic fence value generation. Integration 3A adds exact DXGI adapter LUID
 //! extraction through an audited Windows HAL boundary. Integration 3B adds the D3D11
-//! shared NV12 producer half of the interop bridge (Windows-only).
+//! shared NV12 producer half of the interop bridge (Windows-only). Integration 3C adds
+//! the D3D12/wgpu consumer half and bidirectional raw-queue fence synchronization.
 
 #![deny(unsafe_code)]
 
@@ -11,6 +12,7 @@ mod adapter;
 mod context;
 mod error;
 mod fence_timeline;
+mod gpu_video_frame;
 mod luid;
 mod nv12_allocation;
 #[cfg(target_os = "windows")]
@@ -20,10 +22,14 @@ pub use adapter::{AdapterIdentity, GpuBackend, GpuDeviceType, REQUIRED_DEVICE_FE
 pub use context::{GpuBootstrap, GpuContext, SurfaceWindowTarget};
 pub use error::GpuError;
 pub use fence_timeline::{FenceTimeline, FrameFenceValues};
+pub use gpu_video_frame::{GpuVideoFrame, GpuVideoPixelFormat};
 pub use luid::{DxgiAdapterLuid, validate_same_adapter};
 
 #[cfg(target_os = "windows")]
-pub use windows::{D3d11DecodedSurfaceRef, SharedNv12TextureDesc, WindowsD3d11SharedNv12Producer};
+pub use windows::{
+    D3d11DecodedSurfaceRef, SharedNv12TextureDesc, WindowsD3d11SharedNv12Producer,
+    WindowsD3d11WgpuInteropBridge,
+};
 
 #[cfg(test)]
 mod send_sync {

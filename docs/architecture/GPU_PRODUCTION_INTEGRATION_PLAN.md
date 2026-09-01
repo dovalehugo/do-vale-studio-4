@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-01  
 **Baseline commit:** `a5fdb42b6436c0f23f3960b3cdc6ed94d98e7b5d`  
-**Status:** Integrations 0–2 and 3A complete; **Integration 3B** (D3D11 shared NV12 producer) implemented and **hardware-validated** on Windows; **Integration 3 overall incomplete** (3C consumer pending)
+**Status:** Integrations 0–2, 3A, 3B, and **3C** complete. Integration 3 interop bridge is **complete**: shared-resource import and two-cycle bidirectional fence synchronization are **hardware-validated** with a synthetic D3D11 test texture (validation machine is evidence, not a hardcoded requirement). Real FFmpeg decode source remains **Integration 4**; real wgpu NV12 sampling/rendering remains **Integration 5**.
 **Evidence:** GPU Experiments 0–2 PASS (`docs/gpu/GPU_EXPERIMENT_2.md`, `DOVALE_STUDIO_4_HANDOFF_EXPERIMENT_2.md`)
 
 This document transfers the validated experiment pipeline into production crates. It defines proposed APIs, ownership, threading, initialization, unsafe invariants, and staged milestones. **Integration 1** implements platform-independent video metadata in `dvs-media`; GPU, decoder, and playback runtime code are not started.
@@ -649,19 +649,23 @@ Every milestone must compile (`cargo check --workspace`). No milestone modifies 
 | **Verify** | `cargo test -p dvs-gpu`; `cargo clippy -p dvs-gpu -- -D warnings`; ignored hardware test |
 | **Untouched** | Experiment 2 sources, `dvs-decoder`, `context.rs` / `adapter.rs` / `luid.rs` / `fence_timeline.rs` |
 
-### Integration 3C — D3D12/wgpu shared NV12 consumer (pending)
+### Integration 3C — D3D12/wgpu shared NV12 consumer ✅ (hardware-validated)
 
 | Field | Detail |
 |-------|--------|
-| **Status** | **Pending** — opens producer NT handles, wgpu-hal import, raw queue Wait/Signal |
-| **Acceptance** | Consumes private handles from `WindowsD3d11SharedNv12Producer`; signals `consumed` from wgpu queue |
-| **Untouched** | Experiment sources |
+| **Baseline** | `a4c005c8783198034a0abb24dd0aa0da9c53b06c` |
+| **Files** | `crates/dvs-gpu/src/gpu_video_frame.rs`, `crates/dvs-gpu/src/windows/{dx12_import,dx12_queue_sync,interop_bridge}.rs`, `crates/dvs-gpu/tests/windows_d3d11_wgpu_interop.rs` |
+| **Public types** | `GpuVideoFrame`, `GpuVideoPixelFormat`, `WindowsD3d11WgpuInteropBridge` (Windows-only) |
+| **Acceptance** | One-time `OpenSharedHandle` (texture=1, fence=1); D3D12 descriptor validation; `texture_from_raw` + `create_texture_from_hal`; raw queue `Wait(ready)` / `Signal(consumed)`; two-frame hardware cycle with synthetic D3D11 NV12 source |
+| **Runtime evidence** | `cargo test -p dvs-gpu --test windows_d3d11_wgpu_interop -- --ignored --nocapture` on Windows hardware. Validates shared-handle import and bidirectional fence sync only — **not** real FFmpeg frames, **not** WGSL sampling, **not** visual production validation |
+| **Not implemented** | FFmpeg (Integration 4), decoder, WGSL shaders, render pipeline (Integration 5), playback, surface presentation |
+| **Verify** | `cargo test -p dvs-gpu`; ignored interop hardware test |
 
-### Integration 3 — Windows D3D11/D3D12 interop bridge (3B + 3C)
+### Integration 3 — Windows D3D11/D3D12 interop bridge
 
 | Field | Detail |
 |-------|--------|
-| **Status** | **Incomplete** — 3B producer complete (hardware-validated); 3C consumer pending |
+| **Status** | **Complete** — 3B producer + 3C consumer hardware-validated (synthetic D3D11 test texture); FFmpeg decode wiring (Integration 4) and wgpu render sampling (Integration 5) pending |
 
 ### Integration 4 — `dvs-decoder` D3D11VA session extraction
 
@@ -763,8 +767,8 @@ Production must re-measure after integration; do not assume identical FPS until 
 | Integration 2 `dvs-gpu` foundation | **Complete** (`GpuBootstrap`, `GpuContext`, `AdapterIdentity`, `GpuError`, `FenceTimeline`) |
 | Integration 3A DXGI LUID | **Complete** (HAL extraction + pure tests; **compilation-verified**, runtime via `GpuBootstrap` pending real window test) |
 | Integration 3B D3D11 producer | **Complete** (shareable NV12 + fence + keyed mutex; **hardware-validated** on Windows; synthetic test source only) |
-| Integration 3C D3D12/wgpu consumer | **Pending** (`OpenSharedHandle`, wgpu-hal import, queue Wait/Signal) |
-| Integration 3 interop bridge | **Incomplete** (3B complete; 3C pending) |
+| Integration 3C D3D12/wgpu consumer | **Complete** (shared-handle import + two-cycle bidirectional sync; **hardware-validated** with synthetic D3D11 test texture; plane views created in test only — no FFmpeg, no WGSL render, no visual production validation) |
+| Integration 3 interop bridge | **Complete** (3B+3C); real FFmpeg source → Integration 4; real wgpu sampling/render → Integration 5 |
 | Production API | **Partial** (`dvs-media` + `dvs-gpu` bootstrap/LUID HAL path; decoder/playback not started) |
 | Production runtime | **Not started** — Experiment 2 remains runtime evidence |
 | CPU fallback | **Not introduced** |

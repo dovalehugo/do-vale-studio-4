@@ -465,10 +465,12 @@ version = "0.1.0"
 name = "dvs-gpu"
 version = "0.1.0"
 dependencies = [
+ "pollster",
  "raw-window-handle",
  "thiserror 2.0.20",
  "wgpu",
  "windows",
+ "winit",
 ]
 
 [[package]]

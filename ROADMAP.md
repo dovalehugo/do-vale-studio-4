@@ -23,14 +23,15 @@
 - [x] Integration 0 — dependency graph wiring (compile-time only; no production API)
 - [x] Integration 2 — `dvs-gpu` safe DX12 context, adapter identity, `FenceTimeline`
 - [x] Integration 3A — exact DXGI adapter LUID HAL extraction (`dvs-gpu`; compilation-verified; runtime via `GpuBootstrap` pending)
-- [x] Integration 3B — D3D11 shared NV12 producer (`WindowsD3d11SharedNv12Producer`; hardware-validated; no D3D12/wgpu import)
-- [ ] Integration 3 — D3D11/D3D12 interop bridge (3C: D3D12/wgpu consumer, ingest)
+- [x] Integration 3B — D3D11 shared NV12 producer (`WindowsD3d11SharedNv12Producer`; hardware-validated)
+- [x] Integration 3C — D3D12/wgpu consumer (`WindowsD3d11WgpuInteropBridge`, `GpuVideoFrame`; hardware-validated)
+- [x] Integration 3 — D3D11/D3D12 interop bridge (producer + consumer; decoder/render wiring pending)
 - [ ] Production crate extraction (Integrations 3B–8)
 - [ ] FFmpeg integration (`dvs-decoder`)
 - [ ] Media probing (`dvs-media`)
 - [ ] Hardware decoder detection (production)
 - [x] VideoFrame / metadata abstraction (`dvs-media`)
-- [ ] GPU frame abstraction (`dvs-gpu`) — 3B producer complete; 3C consumer / shared-handle import pending
+- [ ] GPU frame abstraction (`dvs-gpu`) — interop bridge complete; decoder/render integration pending
 - [ ] GPU scaling (production viewport)
 - [ ] Native video viewport (`dvs-app`)
 
