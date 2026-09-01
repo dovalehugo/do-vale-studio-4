@@ -26,8 +26,11 @@
 - [x] Integration 3B — D3D11 shared NV12 producer (`WindowsD3d11SharedNv12Producer`; hardware-validated)
 - [x] Integration 3C — D3D12/wgpu consumer (`WindowsD3d11WgpuInteropBridge`, `GpuVideoFrame`; hardware-validated)
 - [x] Integration 3 — D3D11/D3D12 interop bridge (producer + consumer; decoder/render wiring pending)
-- [ ] Production crate extraction (Integrations 3B–8)
-- [ ] FFmpeg integration (`dvs-decoder`)
+- [x] Integration 4A — `dvs-decoder` FFmpeg D3D11VA session (hardware ignored test PASS; borrowed D3D11 surfaces via production API; no CPU readback/fallback/copy/bridge/render)
+- [ ] Integration 4B — decoded D3D11 surfaces → production interop bridge
+- [ ] Integration 4 — complete (4A + 4B)
+- [ ] Production crate extraction (Integrations 4B–8)
+- [ ] FFmpeg integration (`dvs-decoder`) — 4A slice only; no playback/app wiring
 - [ ] Media probing (`dvs-media`)
 - [ ] Hardware decoder detection (production)
 - [x] VideoFrame / metadata abstraction (`dvs-media`)

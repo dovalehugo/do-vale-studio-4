@@ -1,14 +1,21 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! Production FFmpeg D3D11VA decoder session (Windows).
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+#![deny(unsafe_code)]
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+mod error;
+mod metadata;
+
+#[cfg(windows)]
+mod ffmpeg;
+#[cfg(windows)]
+mod session;
+
+pub use error::DecoderError;
+pub use metadata::{
+    AV_NOPTS_VALUE, build_dimensions, build_frame_metadata, color_info_from_ffmpeg,
+    map_color_matrix, map_color_primaries, map_color_range, map_transfer_characteristic,
+    next_frame_id, pts_to_timestamp,
+};
+
+#[cfg(windows)]
+pub use session::{DecodedD3d11Frame, DecoderSession};

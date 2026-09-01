@@ -1,8 +1,21 @@
 [package]
 name = "dvs-decoder"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
 dvs-media.workspace = true
 dvs-gpu.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+ffmpeg-sys-next = "8"
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+] }
+
+[dev-dependencies]
+pollster = "0.4"
+winit = "0.30"

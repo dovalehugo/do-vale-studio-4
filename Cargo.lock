@@ -455,6 +455,11 @@ version = "0.1.0"
 dependencies = [
  "dvs-gpu",
  "dvs-media",
+ "ffmpeg-sys-next",
+ "pollster",
+ "thiserror 2.0.20",
+ "windows",
+ "winit",
 ]
 
 [[package]]

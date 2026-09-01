@@ -671,11 +671,14 @@ Every milestone must compile (`cargo check --workspace`). No milestone modifies 
 
 | Field | Detail |
 |-------|--------|
-| **Files** | `crates/dvs-decoder/src/{lib,session,error}.rs`, `ffmpeg/d3d11va.rs` |
+| **Status** | **4A complete** — real FFmpeg D3D11VA surfaces validated through the production decoder API (`decode_next_d3d11`); hardware ignored test PASS on validation machine; no CPU readback, software fallback, texture copy, bridge, or rendering in 4A; no production visual validation yet |
+| **Files** | `crates/dvs-decoder/src/{lib,session,error,metadata}.rs`, `ffmpeg/{mod,ffi,raii,d3d11va}.rs`, `tests/windows_d3d11va_decode.rs` |
 | **Dependencies** | `ffmpeg-sys-next`, `dvs-media`, `dvs-gpu` |
-| **Acceptance** | Opens fixture; `decode_next_d3d11` returns metadata + slice; no shareable copy inside decoder |
-| **Verify** | `cargo test -p dvs-decoder -- --ignored` with fixture path env |
-| **Untouched** | `dvs-playback`, `dvs-app` |
+| **Acceptance (4A)** | Opens fixture; validates DXGI LUID against wgpu; `decode_next_d3d11` returns `VideoFrameMetadata` + borrowed `D3d11DecodedSurfaceRef`; no shareable copy, bridge, render, or CPU transfer inside decoder |
+| **Verify** | `cargo test -p dvs-decoder` + `cargo test -p dvs-decoder --test windows_d3d11va_decode -- --ignored --nocapture` |
+| **4B pending** | Real decoded surfaces → production interop bridge (`WindowsD3d11WgpuInteropBridge`) |
+| **5 pending** | NV12 WGSL sampling/render; no production visual validation yet |
+| **Untouched** | `dvs-playback`, `dvs-app`, Experiment 2 |
 
 ### Integration 5 — `dvs-render` NV12 passthrough renderer
 
@@ -769,7 +772,9 @@ Production must re-measure after integration; do not assume identical FPS until 
 | Integration 3B D3D11 producer | **Complete** (shareable NV12 + fence + keyed mutex; **hardware-validated** on Windows; synthetic test source only) |
 | Integration 3C D3D12/wgpu consumer | **Complete** (shared-handle import + two-cycle bidirectional sync; **hardware-validated** with synthetic D3D11 test texture; plane views created in test only — no FFmpeg, no WGSL render, no visual production validation) |
 | Integration 3 interop bridge | **Complete** (3B+3C); real FFmpeg source → Integration 4; real wgpu sampling/render → Integration 5 |
-| Production API | **Partial** (`dvs-media` + `dvs-gpu` bootstrap/LUID HAL path; decoder/playback not started) |
+| Integration 4A D3D11VA decoder session | **Complete** — real FFmpeg D3D11VA borrowed surfaces validated via `windows_d3d11va_decode` (hardware evidence; not an RX 580 requirement) |
+| Integration 4 overall | **Incomplete** — 4B (decoded surface → interop bridge) pending |
+| Production API | **Partial** (`dvs-media` + `dvs-gpu` + `dvs-decoder` 4A slice; playback/render wiring not started) |
 | Production runtime | **Not started** — Experiment 2 remains runtime evidence |
 | CPU fallback | **Not introduced** |
 | Experiment 2 regression crate | **Isolated** (`tests/gpu_d3d11_interop` unchanged) |
