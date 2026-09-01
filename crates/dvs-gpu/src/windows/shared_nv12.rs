@@ -24,6 +24,7 @@ use crate::fence_timeline::FrameFenceValues;
 use crate::luid::{DxgiAdapterLuid, validate_same_adapter};
 
 use super::d3d11_device::extract_d3d11_adapter_luid;
+use super::d3d11_lock::D3d11ExternalContextLock;
 use super::d3d11_surface::{D3d11DecodedSurfaceRef, SharedNv12TextureDesc};
 use super::owned_handle::OwnedNtHandle;
 
@@ -41,6 +42,7 @@ pub struct WindowsD3d11SharedNv12Producer {
     fence_handle: OwnedNtHandle,
     desc: SharedNv12TextureDesc,
     adapter_luid: DxgiAdapterLuid,
+    external_context_lock: Option<D3d11ExternalContextLock>,
 }
 
 impl WindowsD3d11SharedNv12Producer {
@@ -50,6 +52,17 @@ impl WindowsD3d11SharedNv12Producer {
         context: &ID3D11DeviceContext,
         expected_wgpu_luid: DxgiAdapterLuid,
         desc: SharedNv12TextureDesc,
+    ) -> Result<Self, GpuError> {
+        Self::new_with_external_lock(device, context, expected_wgpu_luid, desc, None)
+    }
+
+    /// Creates producer resources and optionally applies FFmpeg `device_context` lock callbacks.
+    pub fn new_with_external_lock(
+        device: &ID3D11Device,
+        context: &ID3D11DeviceContext,
+        expected_wgpu_luid: DxgiAdapterLuid,
+        desc: SharedNv12TextureDesc,
+        external_context_lock: Option<D3d11ExternalContextLock>,
     ) -> Result<Self, GpuError> {
         let actual_luid = extract_d3d11_adapter_luid(device)?;
         validate_same_adapter(expected_wgpu_luid, actual_luid)?;
@@ -84,6 +97,7 @@ impl WindowsD3d11SharedNv12Producer {
             fence_handle,
             desc,
             adapter_luid: actual_luid,
+            external_context_lock,
         })
     }
 
@@ -119,6 +133,12 @@ impl WindowsD3d11SharedNv12Producer {
         frame: D3d11DecodedSurfaceRef<'_>,
         fence_values: FrameFenceValues,
     ) -> Result<(), GpuError> {
+        let _lock_guard = self
+            .external_context_lock
+            .as_ref()
+            .cloned()
+            .map(ExternalContextLockGuard::acquire);
+
         let source_subresource =
             frame.validate_for_copy(self.desc.allocation_width(), self.desc.allocation_height())?;
 
@@ -163,6 +183,29 @@ impl WindowsD3d11SharedNv12Producer {
         }
 
         Ok(())
+    }
+}
+
+struct ExternalContextLockGuard {
+    lock: D3d11ExternalContextLock,
+    acquired: bool,
+}
+
+impl ExternalContextLockGuard {
+    fn acquire(lock: D3d11ExternalContextLock) -> Self {
+        lock.acquire();
+        Self {
+            lock,
+            acquired: true,
+        }
+    }
+}
+
+impl Drop for ExternalContextLockGuard {
+    fn drop(&mut self) {
+        if self.acquired {
+            self.lock.release();
+        }
     }
 }
 
@@ -270,6 +313,8 @@ fn copy_decoder_to_shareable(
     destination: &ID3D11Texture2D,
 ) -> Result<(), GpuError> {
     // SAFETY: Source/destination textures and subresource indices were validated before copy.
+    // `CopySubresourceRegion` and `Flush` are enqueued on the immediate context in order;
+    // `Flush` submits asynchronously and does not wait for GPU completion.
     unsafe {
         context.CopySubresourceRegion(destination, 0, 0, 0, 0, source, source_subresource, None);
         context.Flush();

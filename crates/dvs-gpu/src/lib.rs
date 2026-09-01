@@ -27,7 +27,8 @@ pub use luid::{DxgiAdapterLuid, validate_same_adapter};
 
 #[cfg(target_os = "windows")]
 pub use windows::{
-    D3d11DecodedSurfaceRef, SharedNv12TextureDesc, WindowsD3d11SharedNv12Producer,
+    D3d11DecodedSurfaceRef, D3d11ExternalContextLock, D3d11ExternalContextLockConfigError,
+    D3d11ExternalContextLockKeepalive, SharedNv12TextureDesc, WindowsD3d11SharedNv12Producer,
     WindowsD3d11WgpuInteropBridge,
 };
 

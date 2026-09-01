@@ -78,3 +78,9 @@ impl DecoderError {
         }
     }
 }
+
+impl From<dvs_gpu::D3d11ExternalContextLockConfigError> for DecoderError {
+    fn from(error: dvs_gpu::D3d11ExternalContextLockConfigError) -> Self {
+        Self::Gpu(dvs_gpu::GpuError::D3d11ExternalContextLockConfigInvalid { error })
+    }
+}

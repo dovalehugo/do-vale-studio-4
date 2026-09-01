@@ -18,4 +18,4 @@ pub use metadata::{
 };
 
 #[cfg(windows)]
-pub use session::{DecodedD3d11Frame, DecoderSession};
+pub use session::{DecodedD3d11Frame, DecoderD3d11Hardware, DecoderSession};

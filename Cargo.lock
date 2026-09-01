@@ -458,6 +458,7 @@ dependencies = [
  "ffmpeg-sys-next",
  "pollster",
  "thiserror 2.0.20",
+ "wgpu",
  "windows",
  "winit",
 ]

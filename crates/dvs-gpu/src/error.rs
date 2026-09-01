@@ -115,6 +115,13 @@ pub enum GpuError {
     #[error("IDXGIKeyedMutex unavailable on shareable texture")]
     KeyedMutexUnavailable(#[source] windows::core::Error),
 
+    /// External FFmpeg context lock callback configuration is invalid.
+    #[cfg(target_os = "windows")]
+    #[error("invalid D3D11 external context lock configuration: {error:?}")]
+    D3d11ExternalContextLockConfigInvalid {
+        error: crate::D3d11ExternalContextLockConfigError,
+    },
+
     /// Keyed mutex acquire timed out.
     #[cfg(target_os = "windows")]
     #[error("IDXGIKeyedMutex::AcquireSync timed out")]

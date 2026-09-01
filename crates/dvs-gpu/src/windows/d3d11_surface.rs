@@ -36,6 +36,11 @@ impl<'a> D3d11DecodedSurfaceRef<'a> {
         })
     }
 
+    /// Returns the decoder texture array slice index for this frame.
+    pub fn array_slice(&self) -> u32 {
+        self.array_slice
+    }
+
     pub(crate) fn texture(&self) -> &ID3D11Texture2D {
         self.texture
     }

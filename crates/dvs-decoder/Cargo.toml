@@ -19,3 +19,4 @@ windows = { workspace = true, features = [
 [dev-dependencies]
 pollster = "0.4"
 winit = "0.30"
+wgpu.workspace = true

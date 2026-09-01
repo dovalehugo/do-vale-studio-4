@@ -173,6 +173,16 @@ impl AvHwDeviceRef {
     pub(crate) fn as_ptr(&self) -> *mut ffmpeg_sys_next::AVBufferRef {
         self.ptr
     }
+
+    /// Returns an owned `av_buffer_ref` clone that keeps the hardware device alive.
+    pub(crate) fn retain_ref(&self) -> Result<Self, DecoderError> {
+        // SAFETY: `ptr` is a live FFmpeg hardware-device buffer reference.
+        let cloned = unsafe { ffmpeg_sys_next::av_buffer_ref(self.ptr) };
+        if cloned.is_null() {
+            return Err(DecoderError::D3d11vaUnavailable);
+        }
+        Ok(Self::from_ptr(cloned))
+    }
 }
 
 impl Drop for AvHwDeviceRef {

@@ -3,6 +3,8 @@
 #[cfg(target_os = "windows")]
 mod d3d11_device;
 #[cfg(target_os = "windows")]
+mod d3d11_lock;
+#[cfg(target_os = "windows")]
 mod d3d11_surface;
 #[cfg(target_os = "windows")]
 mod dx12_import;
@@ -20,6 +22,11 @@ mod shared_nv12;
 #[cfg(target_os = "windows")]
 pub(crate) use dxgi_luid::extract_dxgi_adapter_luid;
 
+#[cfg(target_os = "windows")]
+pub use d3d11_lock::{
+    D3d11ExternalContextLock, D3d11ExternalContextLockConfigError,
+    D3d11ExternalContextLockKeepalive,
+};
 #[cfg(target_os = "windows")]
 pub use d3d11_surface::{D3d11DecodedSurfaceRef, SharedNv12TextureDesc};
 #[cfg(target_os = "windows")]

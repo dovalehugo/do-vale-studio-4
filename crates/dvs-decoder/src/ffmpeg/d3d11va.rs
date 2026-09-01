@@ -3,7 +3,9 @@
 use std::ffi::c_void;
 
 use dvs_gpu::{DxgiAdapterLuid, validate_same_adapter};
-use windows::Win32::Graphics::Direct3D11::{D3D11_TEXTURE2D_DESC, ID3D11Texture2D};
+use windows::Win32::Graphics::Direct3D11::{
+    D3D11_TEXTURE2D_DESC, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
+};
 use windows::Win32::Graphics::Dxgi::{IDXGIAdapter, IDXGIDevice};
 use windows::core::Interface;
 
@@ -15,10 +17,16 @@ const AV_PIX_FMT_D3D11: i32 = ffmpeg_sys_next::AVPixelFormat::AV_PIX_FMT_D3D11 a
 const AV_PIX_FMT_NONE: ffmpeg_sys_next::AVPixelFormat =
     ffmpeg_sys_next::AVPixelFormat::AV_PIX_FMT_NONE;
 
-/// FFmpeg `AVD3D11VADeviceContext` first field layout (`ID3D11Device *device`).
+/// FFmpeg `AVD3D11VADeviceContext` layout (prefix fields used by the decoder).
 #[repr(C)]
 struct AvD3d11VaDeviceContext {
     device: *mut c_void,
+    device_context: *mut c_void,
+    video_device: *mut c_void,
+    video_context: *mut c_void,
+    lock: Option<unsafe extern "C" fn(*mut c_void)>,
+    unlock: Option<unsafe extern "C" fn(*mut c_void)>,
+    lock_ctx: *mut c_void,
 }
 
 /// FFmpeg `get_format` callback that selects `AV_PIX_FMT_D3D11` only when offered.
@@ -147,9 +155,9 @@ pub(crate) fn adapter_luid_from_hw_device(
     Ok(actual)
 }
 
-fn query_ffmpeg_d3d11_adapter_luid(
+fn ffmpeg_d3d11va_context_ptr(
     hw_device: &AvHwDeviceRef,
-) -> Result<DxgiAdapterLuid, DecoderError> {
+) -> Result<*const AvD3d11VaDeviceContext, DecoderError> {
     // SAFETY: `hw_device` is a live FFmpeg hardware device buffer reference.
     let device_ctx = unsafe {
         let buffer = hw_device
@@ -168,23 +176,122 @@ fn query_ffmpeg_d3d11_adapter_luid(
         return Err(DecoderError::D3d11vaUnavailable);
     }
 
-    // SAFETY: `hwctx` points at FFmpeg's D3D11VA device context; only `device` is read.
+    // SAFETY: `hwctx` points at FFmpeg's D3D11VA device context for the session lifetime.
     let d3d11va = unsafe { (*device_ctx).hwctx as *const AvD3d11VaDeviceContext };
     if d3d11va.is_null() {
         return Err(DecoderError::MissingD3d11Device);
     }
 
-    // SAFETY: `device` is owned by FFmpeg for the lifetime of the hardware device context.
-    let raw_device = unsafe { (*d3d11va).device };
-    if raw_device.is_null() {
-        return Err(DecoderError::MissingD3d11Device);
+    Ok(d3d11va)
+}
+
+/// Borrows FFmpeg's D3D11VA `ID3D11Device` for interop producer setup.
+pub(crate) fn borrow_ffmpeg_d3d11_device(
+    hw_device: &AvHwDeviceRef,
+) -> Result<&ID3D11Device, DecoderError> {
+    let d3d11va = ffmpeg_d3d11va_context_ptr(hw_device)?;
+
+    // SAFETY: `device` is owned by FFmpeg for the lifetime of the hardware device context;
+    // `from_raw_borrowed` does not take ownership; the pointer slot remains valid for `'a`.
+    unsafe {
+        let slot = std::ptr::addr_of!((*d3d11va).device);
+        let com_pointer_slot = &*slot.cast::<*mut c_void>();
+        ID3D11Device::from_raw_borrowed(com_pointer_slot).ok_or(DecoderError::MissingD3d11Device)
+    }
+}
+
+/// FFmpeg lock callbacks installed on `AVD3D11VADeviceContext` during hwdevice init.
+pub(crate) struct FfmpegD3d11DeviceLock {
+    lock: Option<unsafe extern "C" fn(*mut c_void)>,
+    unlock: Option<unsafe extern "C" fn(*mut c_void)>,
+    lock_ctx: *mut c_void,
+}
+
+impl FfmpegD3d11DeviceLock {
+    pub(crate) fn from_hw_device(hw_device: &AvHwDeviceRef) -> Result<Self, DecoderError> {
+        let d3d11va = ffmpeg_d3d11va_context_ptr(hw_device)?;
+        // SAFETY: `d3d11va` points at FFmpeg's initialized D3D11VA device context.
+        Ok(unsafe {
+            Self {
+                lock: (*d3d11va).lock,
+                unlock: (*d3d11va).unlock,
+                lock_ctx: (*d3d11va).lock_ctx,
+            }
+        })
     }
 
-    // SAFETY: `raw_device` is a live COM pointer borrowed from FFmpeg's D3D11VA context.
-    let d3d11_device = unsafe {
-        windows::Win32::Graphics::Direct3D11::ID3D11Device::from_raw_borrowed(&raw_device)
-            .ok_or(DecoderError::MissingD3d11Device)?
-    };
+    /// Converts to the interop producer lock type with an owned hardware-device keepalive.
+    pub(crate) fn to_external(
+        &self,
+        keepalive: dvs_gpu::D3d11ExternalContextLockKeepalive,
+    ) -> Result<dvs_gpu::D3d11ExternalContextLock, dvs_gpu::D3d11ExternalContextLockConfigError>
+    {
+        // SAFETY: `lock`/`unlock`/`lock_ctx` are read from the live `AVD3D11VADeviceContext`
+        // owned by `keepalive`'s retained `AVBufferRef`; callbacks are FFmpeg's matching pair;
+        // `lock_ctx` remains valid until the keepalive `AVBufferRef` is released; callbacks
+        // obey FFmpeg's recursive lock protocol and do not unwind across FFI; acquire/release
+        // are only used from the decoder-thread producer path with RAII pairing.
+        unsafe {
+            dvs_gpu::D3d11ExternalContextLock::new_with_keepalive(
+                self.lock,
+                self.unlock,
+                self.lock_ctx,
+                keepalive,
+            )
+        }
+    }
+}
+
+/// Builds a producer-side FFmpeg `device_context` lock with an owned hardware-device keepalive.
+pub(crate) fn build_external_context_lock(
+    hw_device: &AvHwDeviceRef,
+) -> Result<dvs_gpu::D3d11ExternalContextLock, DecoderError> {
+    let ffmpeg_lock = FfmpegD3d11DeviceLock::from_hw_device(hw_device)?;
+    let keepalive = dvs_gpu::D3d11ExternalContextLockKeepalive::new(hw_device.retain_ref()?);
+    ffmpeg_lock
+        .to_external(keepalive)
+        .map_err(DecoderError::from)
+}
+
+/// Clones FFmpeg's `AVD3D11VADeviceContext.device_context` COM reference.
+///
+/// FFmpeg populates this field via `ID3D11Device::GetImmediateContext` during hwdevice init.
+pub(crate) fn clone_ffmpeg_d3d11_device_context(
+    hw_device: &AvHwDeviceRef,
+) -> Result<ID3D11DeviceContext, DecoderError> {
+    let d3d11va = ffmpeg_d3d11va_context_ptr(hw_device)?;
+    // SAFETY: `device_context` is populated by FFmpeg during `av_hwdevice_ctx_create` init.
+    let raw_context = unsafe { (*d3d11va).device_context };
+    if raw_context.is_null() {
+        return Err(DecoderError::MissingD3d11Device);
+    }
+    // SAFETY: `device_context` slot references FFmpeg's immediate context; `from_raw_borrowed`
+    // does not take ownership; `clone` AddRefs for session storage.
+    unsafe {
+        let slot = std::ptr::addr_of!((*d3d11va).device_context);
+        let borrowed = ID3D11DeviceContext::from_raw_borrowed(&*slot.cast::<*mut c_void>())
+            .ok_or(DecoderError::MissingD3d11Device)?;
+        Ok(borrowed.clone())
+    }
+}
+
+#[cfg(debug_assertions)]
+pub(crate) fn ffmpeg_d3d11_device_context_ptr(
+    hw_device: &AvHwDeviceRef,
+) -> Result<*mut c_void, DecoderError> {
+    let d3d11va = ffmpeg_d3d11va_context_ptr(hw_device)?;
+    // SAFETY: `device_context` is FFmpeg's immediate context pointer slot.
+    let raw = unsafe { (*d3d11va).device_context };
+    if raw.is_null() {
+        return Err(DecoderError::MissingD3d11Device);
+    }
+    Ok(raw)
+}
+
+fn query_ffmpeg_d3d11_adapter_luid(
+    hw_device: &AvHwDeviceRef,
+) -> Result<DxgiAdapterLuid, DecoderError> {
+    let d3d11_device = borrow_ffmpeg_d3d11_device(hw_device)?;
 
     let dxgi_device: IDXGIDevice = d3d11_device
         .cast()

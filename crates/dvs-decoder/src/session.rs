@@ -5,11 +5,14 @@ use std::rc::Rc;
 
 use dvs_gpu::{D3d11DecodedSurfaceRef, DxgiAdapterLuid};
 use dvs_media::VideoFrameMetadata;
+use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11DeviceContext};
+use windows::core::Interface;
 
 use crate::error::DecoderError;
 use crate::ffmpeg::{
     AvCodecContext, AvFormatContext, AvFrame, AvHwDeviceRef, AvPacket, ReadPacketResult,
     ReceiveResult, SendResult, adapter_luid_from_hw_device, borrow_d3d11_decoder_surface,
+    borrow_ffmpeg_d3d11_device, build_external_context_lock, clone_ffmpeg_d3d11_device_context,
     create_d3d11va_device, init_ffmpeg_network, open_d3d11_decoder, read_frame_fields,
 };
 use crate::metadata::{build_frame_metadata, next_frame_id};
@@ -21,13 +24,14 @@ use crate::metadata::{build_frame_metadata, next_frame_id};
 /// Rust drops struct fields in declaration order. The order below ensures the decoded
 /// `AVFrame` (and any D3D11 texture it references) is released before the codec context,
 /// hardware device, and demuxer are torn down:
-/// `current_frame` → `packet` → `codec` → `hw_device` → `format`.
+/// `current_frame` → `packet` → `codec` → `d3d11_context` → `hw_device` → `format`.
 pub struct DecoderSession {
     current_frame: AvFrame,
     packet: AvPacket,
     codec: AvCodecContext,
+    /// Immediate context for FFmpeg's D3D11VA device; released before `hw_device`.
+    d3d11_context: ID3D11DeviceContext,
     /// Keeps the FFmpeg D3D11VA hardware device alive until after the codec is freed.
-    #[allow(dead_code)]
     hw_device: AvHwDeviceRef,
     format: AvFormatContext,
     stream_index: i32,
@@ -43,11 +47,37 @@ pub struct DecoderSession {
 
 /// One decoded D3D11 frame borrowed from the session's current `AVFrame`.
 ///
+/// Dropping this value releases only the Rust surface borrow. The underlying FFmpeg
+/// `AVFrame` (and its pooled array slice) remain held in [`DecoderSession::current_frame`]
+/// until the next [`DecoderSession::decode_next_d3d11`] call unrefs it.
+///
 /// Must be dropped before the next [`DecoderSession::decode_next_d3d11`] call.
 pub struct DecodedD3d11Frame<'a> {
     metadata: VideoFrameMetadata,
     surface: D3d11DecodedSurfaceRef<'a>,
     _thread_bound: PhantomData<Rc<()>>,
+}
+
+/// FFmpeg D3D11VA device handles for interop producer setup.
+///
+/// `context` is a cloned reference to FFmpeg's `AVD3D11VADeviceContext.device_context`
+/// (the same immediate context FFmpeg uses internally). Both remain valid for the
+/// lifetime of the decoder session.
+pub struct DecoderD3d11Hardware<'a> {
+    device: &'a ID3D11Device,
+    context: &'a ID3D11DeviceContext,
+}
+
+impl<'a> DecoderD3d11Hardware<'a> {
+    /// Returns FFmpeg's D3D11VA device used for decoded surfaces.
+    pub fn device(&self) -> &ID3D11Device {
+        self.device
+    }
+
+    /// Returns FFmpeg's immediate `device_context` used for interop copies.
+    pub fn context(&self) -> &ID3D11DeviceContext {
+        self.context
+    }
 }
 
 impl<'a> DecodedD3d11Frame<'a> {
@@ -88,12 +118,14 @@ impl DecoderSession {
 
         let hw_device = create_d3d11va_device()?;
         let adapter_luid = adapter_luid_from_hw_device(&hw_device, required_adapter)?;
+        let d3d11_context = clone_ffmpeg_d3d11_device_context(&hw_device)?;
         let codec = open_d3d11_decoder(codecpar, &hw_device)?;
 
         Ok(Self {
             current_frame: AvFrame::new()?,
             packet: AvPacket::new()?,
             codec,
+            d3d11_context,
             hw_device,
             format,
             stream_index,
@@ -111,6 +143,40 @@ impl DecoderSession {
     /// Returns the validated DXGI adapter LUID for FFmpeg's D3D11VA device.
     pub fn adapter_luid(&self) -> DxgiAdapterLuid {
         self.adapter_luid
+    }
+
+    /// Returns borrowed FFmpeg D3D11VA device handles for interop producer setup.
+    pub fn d3d11_hardware(&self) -> Result<DecoderD3d11Hardware<'_>, DecoderError> {
+        Ok(DecoderD3d11Hardware {
+            device: borrow_ffmpeg_d3d11_device(&self.hw_device)?,
+            context: &self.d3d11_context,
+        })
+    }
+
+    /// Returns FFmpeg lock callbacks for external `device_context` use (interop producer).
+    ///
+    /// The returned lock owns a retained `AVBufferRef` clone so producer-side callback
+    /// invocations remain valid even if the [`DecoderSession`] is dropped first.
+    pub fn external_context_lock(&self) -> Result<dvs_gpu::D3d11ExternalContextLock, DecoderError> {
+        build_external_context_lock(&self.hw_device)
+    }
+
+    /// Debug-only: asserts the session context matches FFmpeg `device_context`.
+    #[cfg(debug_assertions)]
+    pub fn debug_assert_same_ffmpeg_device_context(
+        &self,
+        context: &ID3D11DeviceContext,
+    ) -> Result<(), DecoderError> {
+        use crate::ffmpeg::ffmpeg_d3d11_device_context_ptr;
+
+        let ffmpeg_ptr = ffmpeg_d3d11_device_context_ptr(&self.hw_device)?;
+        let session_ptr = context.as_raw();
+        if !std::ptr::eq(ffmpeg_ptr, session_ptr) {
+            return Err(DecoderError::InvalidDecoderState {
+                detail: "device_context COM identity mismatch",
+            });
+        }
+        Ok(())
     }
 
     /// Decodes the next D3D11 frame, draining delayed frames after demux EOF.
