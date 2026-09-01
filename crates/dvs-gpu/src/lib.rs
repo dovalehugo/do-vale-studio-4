@@ -1,20 +1,24 @@
 //! GPU context foundation for Do Vale Studio 4.
 //!
 //! Integration 2 provides safe DX12 bootstrap, public adapter identity, typed errors,
-//! and monotonic fence value generation. DXGI LUID extraction, `wgpu-hal` access, and
-//! D3D11 interop arrive in Integration 3.
+//! and monotonic fence value generation. Integration 3A adds exact DXGI adapter LUID
+//! extraction through an audited Windows HAL boundary.
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 mod adapter;
 mod context;
 mod error;
 mod fence_timeline;
+mod luid;
+#[cfg(target_os = "windows")]
+mod windows;
 
 pub use adapter::{AdapterIdentity, GpuBackend, GpuDeviceType, REQUIRED_DEVICE_FEATURES};
 pub use context::{GpuBootstrap, GpuContext, SurfaceWindowTarget};
 pub use error::GpuError;
 pub use fence_timeline::{FenceTimeline, FrameFenceValues};
+pub use luid::{DxgiAdapterLuid, validate_same_adapter};
 
 #[cfg(test)]
 mod send_sync {
@@ -28,6 +32,7 @@ mod send_sync {
         assert_send_sync::<AdapterIdentity>();
         assert_send_sync::<GpuBackend>();
         assert_send_sync::<GpuDeviceType>();
+        assert_send_sync::<DxgiAdapterLuid>();
         assert_send_sync::<FrameFenceValues>();
         assert_send_sync::<FenceTimeline>();
         assert_send_sync::<GpuError>();
@@ -50,6 +55,7 @@ mod send_sync {
         };
         let identity = crate::adapter::AdapterIdentity::from_adapter_info(&info).expect("identity");
         assert_values(identity);
+        assert_values(DxgiAdapterLuid::new(1, 2));
         assert_values(FenceTimeline::new());
         assert_values(fence_timeline::fence_values_for_frame(0).expect("frame 0"));
     }

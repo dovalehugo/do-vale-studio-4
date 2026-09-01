@@ -2,6 +2,8 @@
 
 use thiserror::Error;
 
+use crate::luid::DxgiAdapterLuid;
+
 /// Error returned by GPU context initialization and fence timeline operations.
 #[derive(Debug, Error)]
 pub enum GpuError {
@@ -36,4 +38,21 @@ pub enum GpuError {
     /// Fence timeline values would overflow `u64`.
     #[error("fence timeline exhausted")]
     TimelineExhausted,
+
+    /// The wgpu device does not expose a DX12 HAL backend device.
+    #[error("DX12 HAL device unavailable from wgpu device")]
+    HalDx12DeviceUnavailable,
+
+    /// DXGI adapter LUID could not be read from the DX12 device.
+    #[error("DXGI adapter LUID unavailable")]
+    DxgiAdapterLuidUnavailable,
+
+    /// Adapter LUID values do not match the required physical adapter.
+    #[error("adapter LUID mismatch: expected {expected}, actual {actual}")]
+    AdapterLuidMismatch {
+        /// Expected LUID from wgpu bootstrap.
+        expected: DxgiAdapterLuid,
+        /// Actual LUID from the comparison source.
+        actual: DxgiAdapterLuid,
+    },
 }

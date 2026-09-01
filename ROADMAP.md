@@ -22,12 +22,14 @@
 - [x] Windows D3D11VA → wgpu interop (Experiment 2 — `tests/gpu_d3d11_interop`)
 - [x] Integration 0 — dependency graph wiring (compile-time only; no production API)
 - [x] Integration 2 — `dvs-gpu` safe DX12 context, adapter identity, `FenceTimeline`
-- [ ] Production crate extraction (Integrations 3–8)
+- [x] Integration 3A — exact DXGI adapter LUID HAL extraction (`dvs-gpu`; compilation-verified; runtime via `GpuBootstrap` pending)
+- [ ] Integration 3 — D3D11/D3D12 interop bridge (3B/3C: shared textures, fences, ingest)
+- [ ] Production crate extraction (Integrations 3B–8)
 - [ ] FFmpeg integration (`dvs-decoder`)
 - [ ] Media probing (`dvs-media`)
 - [ ] Hardware decoder detection (production)
 - [x] VideoFrame / metadata abstraction (`dvs-media`)
-- [ ] GPU frame abstraction (`dvs-gpu`) — LUID, interop bridge, shared handles pending (Integration 3+)
+- [ ] GPU frame abstraction (`dvs-gpu`) — interop bridge, shared handles pending (Integration 3B+)
 - [ ] GPU scaling (production viewport)
 - [ ] Native video viewport (`dvs-app`)
 

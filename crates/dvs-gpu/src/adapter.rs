@@ -3,6 +3,7 @@
 use wgpu::{AdapterInfo, Backend, DeviceType, Features};
 
 use crate::error::GpuError;
+use crate::luid::DxgiAdapterLuid;
 
 /// Production GPU backend identifier.
 ///
@@ -31,11 +32,9 @@ pub enum GpuDeviceType {
     Other,
 }
 
-/// Safe public adapter identity captured during GPU bootstrap.
-///
-/// Contains the fields exposed by wgpu 27 `AdapterInfo`. Exact DXGI adapter LUID
-/// extraction and same-adapter enforcement are added in Integration 3 via
-/// `wgpu-hal` and Windows APIs. Vendor and device IDs are not a substitute for LUID.
+/// Contains the fields exposed by wgpu 27 `AdapterInfo` plus the exact DXGI adapter
+/// LUID when captured from the wgpu DX12 device on Windows. Vendor and device IDs
+/// are informational only and must not substitute for LUID equality.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct AdapterIdentity {
     name: String,
@@ -45,6 +44,7 @@ pub struct AdapterIdentity {
     device_type: GpuDeviceType,
     driver: String,
     driver_info: String,
+    dxgi_luid: Option<DxgiAdapterLuid>,
 }
 
 impl AdapterIdentity {
@@ -83,7 +83,15 @@ impl AdapterIdentity {
         &self.driver_info
     }
 
+    /// Returns the exact DXGI adapter LUID when captured during Windows bootstrap.
+    pub fn dxgi_luid(&self) -> Option<DxgiAdapterLuid> {
+        self.dxgi_luid
+    }
+
     /// Builds identity from wgpu `AdapterInfo` and validates the initial Windows slice.
+    ///
+    /// The DXGI LUID is not available from `AdapterInfo` and remains `None` until
+    /// enriched after device creation on Windows.
     pub(crate) fn from_adapter_info(info: &AdapterInfo) -> Result<Self, GpuError> {
         let backend = map_backend(info.backend)?;
         let device_type = map_device_type(info.device_type);
@@ -95,9 +103,16 @@ impl AdapterIdentity {
             device_type,
             driver: info.driver.clone(),
             driver_info: info.driver_info.clone(),
+            dxgi_luid: None,
         };
         reject_cpu_or_fallback_adapter(&identity)?;
         Ok(identity)
+    }
+
+    /// Attaches the exact DXGI adapter LUID captured from the wgpu DX12 device.
+    pub(crate) fn with_dxgi_luid(mut self, luid: DxgiAdapterLuid) -> Self {
+        self.dxgi_luid = Some(luid);
+        self
     }
 }
 
@@ -194,16 +209,17 @@ mod tests {
     }
 
     #[test]
-    fn adapter_identity_has_no_luid_field() {
+    fn test_identity_may_represent_none_before_enrichment() {
         let identity = AdapterIdentity::from_adapter_info(&sample_dx12_info()).expect("identity");
-        let _ = (
-            identity.name(),
-            identity.backend(),
-            identity.vendor_id(),
-            identity.device_id(),
-            identity.device_type(),
-            identity.driver(),
-            identity.driver_info(),
-        );
+        assert_eq!(identity.dxgi_luid(), None);
+    }
+
+    #[test]
+    fn adapter_identity_stores_and_exposes_some_luid() {
+        let luid = DxgiAdapterLuid::new(0x00A2_B3C4, 0x0001_0000);
+        let identity = AdapterIdentity::from_adapter_info(&sample_dx12_info())
+            .expect("identity")
+            .with_dxgi_luid(luid);
+        assert_eq!(identity.dxgi_luid(), Some(luid));
     }
 }

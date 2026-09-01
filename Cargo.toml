@@ -37,3 +37,4 @@ dvs-playback = { path = "crates/dvs-playback" }
 thiserror = "2.0.20"
 wgpu = "27.0.1"
 raw-window-handle = "0.6.2"
+windows = "0.58"

@@ -67,6 +67,12 @@ impl GpuBootstrap {
             })
             .await?;
 
+        #[cfg(target_os = "windows")]
+        let identity = {
+            let luid = crate::windows::extract_dxgi_adapter_luid(&device)?;
+            identity.with_dxgi_luid(luid)
+        };
+
         Ok(GpuContext {
             _instance: instance,
             surface_target: target,

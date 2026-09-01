@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-01  
 **Baseline commit:** `a5fdb42b6436c0f23f3960b3cdc6ed94d98e7b5d`  
-**Status:** Integration 0–1 complete; Integration 2 complete (`dvs-gpu` safe DX12 bootstrap, adapter identity, `FenceTimeline`) — **no DXGI LUID, D3D11 interop, or playback runtime yet**
+**Status:** Integrations 0–2 and 3A complete — HAL DXGI LUID extraction implemented and **compilation-verified**; production `GpuBootstrap` runtime LUID capture **not yet exercised** with a real window/app test; **Integration 3 overall incomplete** (3B/3C pending)
 **Evidence:** GPU Experiments 0–2 PASS (`docs/gpu/GPU_EXPERIMENT_2.md`, `DOVALE_STUDIO_4_HANDOFF_EXPERIMENT_2.md`)
 
 This document transfers the validated experiment pipeline into production crates. It defines proposed APIs, ownership, threading, initialization, unsafe invariants, and staged milestones. **Integration 1** implements platform-independent video metadata in `dvs-media`; GPU, decoder, and playback runtime code are not started.
@@ -147,7 +147,7 @@ dvs-media
 | Color range / matrix / primaries | `dvs-media` | BT.709 limited for slice |
 | PTS, time base, frame identity | `dvs-media` | No GPU types |
 | wgpu instance, adapter, device, queue, surface | `dvs-gpu` | Thread-affine to GPU thread |
-| Adapter LUID / identity | `dvs-gpu` | Integration 2: public `AdapterIdentity` (name, backend, vendor/device IDs, driver). Integration 3: exact DXGI LUID via `wgpu-hal` + Windows |
+| Adapter LUID / identity | `dvs-gpu` | Integration 3A: exact DXGI LUID from `ID3D12Device::GetAdapterLuid`. Integration 4: decoder-side LUID comparison |
 | Shareable NV12 texture + NT handle lifetime | `dvs-gpu` | Single texture for slice |
 | Shared fence HANDLE + cached `ID3D12Fence` | `dvs-gpu` | Open once, retain |
 | `ContinuousFramebufferTimeline` | `dvs-gpu` | `ready`/`consumed` values |
@@ -555,9 +555,9 @@ Exact startup sequence for `dvs-app` (Windows slice):
 |------|--------|------------------|
 | 1 | Create application + **video viewport window** (winit) | Exit with `GpuError::SurfaceLost` / init error dialog |
 | 2 | `GpuBootstrap::initialize` — wgpu DX12, surface, `TEXTURE_FORMAT_NV12` | **Fail fast** — no decode without GPU |
-| 3 | Capture `AdapterIdentity` (name, backend, vendor/device ID, driver) | Fail if no suitable adapter |
-| 3b | *(Integration 3)* Capture exact DXGI adapter LUID; enforce same-adapter match with decoder | Fail if LUID mismatch |
+| 3 | Capture `AdapterIdentity` including exact DXGI LUID from wgpu DX12 device | Fail if LUID extraction fails on Windows |
 | 4 | `DecoderSession::open` with `required_adapter` — FFmpeg D3D11VA, `AV_PIX_FMT_D3D11` | **Fail fast** — no software fallback in slice |
+| 4b | `validate_same_adapter(expected, decoder_luid)` | Fail if LUID mismatch |
 | 5 | `WindowsD3d11InteropBridge::create` — shareable NV12, shared fence, probe bootstrap Signal(1) | Fail with typed `GpuError` |
 | 6 | Import shareable texture into wgpu; create plane views; cache fence | Fail — do not continue |
 | 7 | `VideoRenderer::new` — compile WGSL (same coefficients as experiment) | Fail |
@@ -621,16 +621,30 @@ Every milestone must compile (`cargo check --workspace`). No milestone modifies 
 | **Verify** | `cargo test -p dvs-gpu`; `cargo clippy -p dvs-gpu -- -D warnings` |
 | **Untouched** | FFmpeg, D3D11 interop bridge, render, experiments |
 
-### Integration 3 — Windows D3D11/D3D12 interop bridge extraction (+ DXGI LUID)
+### Integration 3A — DXGI adapter LUID extraction ✅
 
 | Field | Detail |
 |-------|--------|
-| **Files** | `crates/dvs-gpu/src/windows/{mod,d3d11_bridge,shareable_texture,fence_sync}.rs` |
+| **Files** | `crates/dvs-gpu/src/luid.rs`, `crates/dvs-gpu/src/windows/{mod,dxgi_luid}.rs` |
+| **Dependencies** | `windows 0.58` (cfg windows only); wgpu `hal` re-export |
+| **Public types** | `DxgiAdapterLuid`, `validate_same_adapter`; `AdapterIdentity::dxgi_luid()` |
+| **Unsafe policy** | Crate `#![deny(unsafe_code)]`; audited unsafe only in `windows/dxgi_luid.rs` (two blocks, each with preceding `SAFETY` comment) |
+| **Acceptance** | HAL path: `ID3D12Device::GetAdapterLuid` via `device.as_hal::<Dx12>()`; pure unit tests for `DxgiAdapterLuid` and `validate_same_adapter` |
+| **Runtime note** | Production `GpuBootstrap::initialize` LUID attachment is **compilation-verified only** on Windows. A real window/app runtime test is pending (`dvs-app`). **GPU Experiment 2** remains the runtime evidence for DXGI/D3D11/wgpu interop. |
+| **Verify** | `cargo test -p dvs-gpu`; `cargo clippy -p dvs-gpu -- -D warnings`; `cargo check -p dvs-gpu` on Windows |
+| **Untouched** | Shared textures, fences, D3D11 bridge, decoder, experiments |
+
+### Integration 3 — Windows D3D11/D3D12 interop bridge (3B + 3C, pending)
+
+| Field | Detail |
+|-------|--------|
+| **Status** | **Incomplete** — 3A (LUID) complete; shared textures, keyed mutex, fence sync, and ingest remain |
+| **Files** | `crates/dvs-gpu/src/windows/{d3d11_bridge,shareable_texture,fence_sync}.rs` (planned) |
 | **Dependencies** | `windows 0.58` (cfg windows) |
-| **Acceptance** | New `tests/gpu_d3d11_interop`-style **integration test binary** in `dvs-gpu` dev-dep or thin `tests/` crate calling only `dvs-gpu` public API; reproduces one-frame ingest + fence |
+| **Acceptance** | Reproduces one-frame ingest + fence via `dvs-gpu` public API only |
 | **Verify** | `cargo test -p dvs-gpu --features windows-interop` (feature flag TBD) |
 | **Untouched** | `dvs-decoder`, experiment sources |
-| **Rollback** | Remove `dvs-gpu/windows` module |
+| **Rollback** | Remove `dvs-gpu/windows` interop modules beyond LUID |
 
 ### Integration 4 — `dvs-decoder` D3D11VA session extraction
 
@@ -729,8 +743,10 @@ Production must re-measure after integration; do not assume identical FPS until 
 | Experiment evidence | **Validated** (GPU Experiment 2 PASS) |
 | Integration 0 dependency wiring | **Complete** (compile-time only) |
 | Integration 1 `dvs-media` metadata | **Complete** (`FrameId`, `Extent2D`, `VisibleRect`, `VideoDimensions`, `VideoPixelFormat`, `VideoColorInfo`, `TimeBase`, `MediaTimestamp`, `VideoFrameMetadata`, `MetadataError`) |
-| Integration 2 `dvs-gpu` foundation | **Complete** (`GpuBootstrap`, `GpuContext`, `AdapterIdentity`, `GpuError`, `FenceTimeline`) — no LUID/interop yet |
-| Production API | **Partial** (`dvs-media` metadata + `dvs-gpu` bootstrap/fence values; decoder/playback not started) |
-| Production runtime | **Not started** |
+| Integration 2 `dvs-gpu` foundation | **Complete** (`GpuBootstrap`, `GpuContext`, `AdapterIdentity`, `GpuError`, `FenceTimeline`) |
+| Integration 3A DXGI LUID | **Complete** (HAL extraction + pure tests; **compilation-verified**, runtime via `GpuBootstrap` pending real window test) |
+| Integration 3 interop bridge | **Incomplete** (3B/3C: shared textures, fences, ingest) |
+| Production API | **Partial** (`dvs-media` + `dvs-gpu` bootstrap/LUID HAL path; decoder/playback not started) |
+| Production runtime | **Not started** — Experiment 2 remains runtime evidence |
 | CPU fallback | **Not introduced** |
 | Experiment 2 regression crate | **Isolated** (`tests/gpu_d3d11_interop` unchanged) |

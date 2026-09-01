@@ -468,6 +468,7 @@ dependencies = [
  "raw-window-handle",
  "thiserror 2.0.20",
  "wgpu",
+ "windows",
 ]
 
 [[package]]
