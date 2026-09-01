@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-01  
 **Baseline commit:** `a5fdb42b6436c0f23f3960b3cdc6ed94d98e7b5d`  
-**Status:** Integrations 0–2 and 3A complete — HAL DXGI LUID extraction implemented and **compilation-verified**; production `GpuBootstrap` runtime LUID capture **not yet exercised** with a real window/app test; **Integration 3 overall incomplete** (3B/3C pending)
+**Status:** Integrations 0–2 and 3A complete; **Integration 3B** (D3D11 shared NV12 producer) implemented and **hardware-validated** on Windows; **Integration 3 overall incomplete** (3C consumer pending)
 **Evidence:** GPU Experiments 0–2 PASS (`docs/gpu/GPU_EXPERIMENT_2.md`, `DOVALE_STUDIO_4_HANDOFF_EXPERIMENT_2.md`)
 
 This document transfers the validated experiment pipeline into production crates. It defines proposed APIs, ownership, threading, initialization, unsafe invariants, and staged milestones. **Integration 1** implements platform-independent video metadata in `dvs-media`; GPU, decoder, and playback runtime code are not started.
@@ -634,17 +634,34 @@ Every milestone must compile (`cargo check --workspace`). No milestone modifies 
 | **Verify** | `cargo test -p dvs-gpu`; `cargo clippy -p dvs-gpu -- -D warnings`; `cargo check -p dvs-gpu` on Windows |
 | **Untouched** | Shared textures, fences, D3D11 bridge, decoder, experiments |
 
-### Integration 3 — Windows D3D11/D3D12 interop bridge (3B + 3C, pending)
+### Integration 3B — Windows D3D11 shared NV12 producer ✅ (hardware-validated)
 
 | Field | Detail |
 |-------|--------|
-| **Status** | **Incomplete** — 3A (LUID) complete; shared textures, keyed mutex, fence sync, and ingest remain |
-| **Files** | `crates/dvs-gpu/src/windows/{d3d11_bridge,shareable_texture,fence_sync}.rs` (planned) |
-| **Dependencies** | `windows 0.58` (cfg windows) |
-| **Acceptance** | Reproduces one-frame ingest + fence via `dvs-gpu` public API only |
-| **Verify** | `cargo test -p dvs-gpu --features windows-interop` (feature flag TBD) |
-| **Untouched** | `dvs-decoder`, experiment sources |
-| **Rollback** | Remove `dvs-gpu/windows` interop modules beyond LUID |
+| **Baseline** | `b351b0eb01d497bd73ba1f0b636bf142d946f270` |
+| **Files** | `crates/dvs-gpu/src/{nv12_allocation,error}.rs`, `crates/dvs-gpu/src/windows/{d3d11_device,d3d11_surface,shared_nv12,owned_handle}.rs`, `crates/dvs-gpu/tests/windows_d3d11_shared.rs` |
+| **Dependencies** | Extended `windows 0.58` cfg-windows features only (`Win32_Graphics_Direct3D11`, `Dxgi`, etc.); no new crates, no wgpu-hal |
+| **Public types** | `D3d11DecodedSurfaceRef`, `SharedNv12TextureDesc`, `WindowsD3d11SharedNv12Producer` (Windows-only) |
+| **Unsafe policy** | Crate `#![deny(unsafe_code)]`; audited unsafe in `windows/{owned_handle,d3d11_device,d3d11_surface,shared_nv12}.rs` only |
+| **Acceptance** | One shareable NV12 texture (`SHARED_NTHANDLE \| SHARED_KEYEDMUTEX`), NT texture/fence handles, `ID3D11Fence` shared sync, keyed-mutex guarded `CopySubresourceRegion`, D3D11 `Wait(consumed)` / `Signal(ready)` ordering; exact D3D11 adapter LUID validation against wgpu `DxgiAdapterLuid` |
+| **Runtime evidence** | `cargo test -p dvs-gpu --test windows_d3d11_shared -- --ignored --nocapture` on Windows hardware (synthetic NV12 source in test only) |
+| **Not implemented** | D3D12 `OpenSharedHandle`, wgpu-hal texture import, plane views, shaders, FFmpeg, playback |
+| **Verify** | `cargo test -p dvs-gpu`; `cargo clippy -p dvs-gpu -- -D warnings`; ignored hardware test |
+| **Untouched** | Experiment 2 sources, `dvs-decoder`, `context.rs` / `adapter.rs` / `luid.rs` / `fence_timeline.rs` |
+
+### Integration 3C — D3D12/wgpu shared NV12 consumer (pending)
+
+| Field | Detail |
+|-------|--------|
+| **Status** | **Pending** — opens producer NT handles, wgpu-hal import, raw queue Wait/Signal |
+| **Acceptance** | Consumes private handles from `WindowsD3d11SharedNv12Producer`; signals `consumed` from wgpu queue |
+| **Untouched** | Experiment sources |
+
+### Integration 3 — Windows D3D11/D3D12 interop bridge (3B + 3C)
+
+| Field | Detail |
+|-------|--------|
+| **Status** | **Incomplete** — 3B producer complete (hardware-validated); 3C consumer pending |
 
 ### Integration 4 — `dvs-decoder` D3D11VA session extraction
 
@@ -745,7 +762,9 @@ Production must re-measure after integration; do not assume identical FPS until 
 | Integration 1 `dvs-media` metadata | **Complete** (`FrameId`, `Extent2D`, `VisibleRect`, `VideoDimensions`, `VideoPixelFormat`, `VideoColorInfo`, `TimeBase`, `MediaTimestamp`, `VideoFrameMetadata`, `MetadataError`) |
 | Integration 2 `dvs-gpu` foundation | **Complete** (`GpuBootstrap`, `GpuContext`, `AdapterIdentity`, `GpuError`, `FenceTimeline`) |
 | Integration 3A DXGI LUID | **Complete** (HAL extraction + pure tests; **compilation-verified**, runtime via `GpuBootstrap` pending real window test) |
-| Integration 3 interop bridge | **Incomplete** (3B/3C: shared textures, fences, ingest) |
+| Integration 3B D3D11 producer | **Complete** (shareable NV12 + fence + keyed mutex; **hardware-validated** on Windows; synthetic test source only) |
+| Integration 3C D3D12/wgpu consumer | **Pending** (`OpenSharedHandle`, wgpu-hal import, queue Wait/Signal) |
+| Integration 3 interop bridge | **Incomplete** (3B complete; 3C pending) |
 | Production API | **Partial** (`dvs-media` + `dvs-gpu` bootstrap/LUID HAL path; decoder/playback not started) |
 | Production runtime | **Not started** — Experiment 2 remains runtime evidence |
 | CPU fallback | **Not introduced** |

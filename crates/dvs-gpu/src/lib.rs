@@ -2,7 +2,8 @@
 //!
 //! Integration 2 provides safe DX12 bootstrap, public adapter identity, typed errors,
 //! and monotonic fence value generation. Integration 3A adds exact DXGI adapter LUID
-//! extraction through an audited Windows HAL boundary.
+//! extraction through an audited Windows HAL boundary. Integration 3B adds the D3D11
+//! shared NV12 producer half of the interop bridge (Windows-only).
 
 #![deny(unsafe_code)]
 
@@ -11,6 +12,7 @@ mod context;
 mod error;
 mod fence_timeline;
 mod luid;
+mod nv12_allocation;
 #[cfg(target_os = "windows")]
 mod windows;
 
@@ -19,6 +21,9 @@ pub use context::{GpuBootstrap, GpuContext, SurfaceWindowTarget};
 pub use error::GpuError;
 pub use fence_timeline::{FenceTimeline, FrameFenceValues};
 pub use luid::{DxgiAdapterLuid, validate_same_adapter};
+
+#[cfg(target_os = "windows")]
+pub use windows::{D3d11DecodedSurfaceRef, SharedNv12TextureDesc, WindowsD3d11SharedNv12Producer};
 
 #[cfg(test)]
 mod send_sync {
@@ -58,5 +63,17 @@ mod send_sync {
         assert_values(DxgiAdapterLuid::new(1, 2));
         assert_values(FenceTimeline::new());
         assert_values(fence_timeline::fence_values_for_frame(0).expect("frame 0"));
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+mod platform_exports {
+    #[test]
+    fn windows_d3d11_producer_exports_are_cfg_gated() {
+        let source = include_str!("lib.rs");
+        assert!(source.contains("#[cfg(target_os = \"windows\")]"));
+        assert!(source.contains("WindowsD3d11SharedNv12Producer"));
+        assert!(source.contains("SharedNv12TextureDesc"));
+        assert!(source.contains("D3d11DecodedSurfaceRef"));
     }
 }

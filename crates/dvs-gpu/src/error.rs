@@ -55,4 +55,98 @@ pub enum GpuError {
         /// Actual LUID from the comparison source.
         actual: DxgiAdapterLuid,
     },
+
+    /// Shared NV12 allocation dimensions are invalid.
+    #[error("invalid shared NV12 texture dimensions")]
+    InvalidSharedTextureDimensions,
+
+    /// NV12 allocation width and height must both be even.
+    #[error("NV12 allocation dimensions must be even")]
+    Nv12DimensionsMustBeEven,
+
+    /// A required D3D11 interface is unavailable.
+    #[cfg(target_os = "windows")]
+    #[error("D3D11 interface unavailable: {interface_name}")]
+    D3d11InterfaceUnavailable { interface_name: &'static str },
+
+    /// DXGI adapter query failed on the D3D11 device.
+    #[cfg(target_os = "windows")]
+    #[error("D3D11 adapter query failed")]
+    D3d11AdapterQueryFailed(#[source] windows::core::Error),
+
+    /// Decoder source texture format is not NV12.
+    #[error("decoder texture format is not DXGI_FORMAT_NV12")]
+    InvalidDecoderTextureFormat,
+
+    /// Decoder source texture dimensions do not match the shared allocation.
+    #[error("decoder texture dimensions do not match shared allocation")]
+    DecoderTextureDimensionsMismatch,
+
+    /// Decoder texture array slice is out of bounds.
+    #[error("decoder texture array slice is out of bounds")]
+    DecoderTextureArraySliceOutOfBounds,
+
+    /// Decoder texture layout is unsupported for copy.
+    #[error("decoder texture layout is unsupported")]
+    DecoderTextureUnsupportedLayout,
+
+    /// Shareable NV12 texture creation failed.
+    #[cfg(target_os = "windows")]
+    #[error("shared NV12 texture creation failed")]
+    SharedNv12TextureCreationFailed(#[source] windows::core::Error),
+
+    /// Shared texture NT handle creation failed.
+    #[cfg(target_os = "windows")]
+    #[error("shared texture NT handle creation failed")]
+    SharedTextureHandleCreationFailed(#[source] windows::core::Error),
+
+    /// Shared D3D11 fence creation failed.
+    #[cfg(target_os = "windows")]
+    #[error("shared D3D11 fence creation failed")]
+    SharedFenceCreationFailed(#[source] windows::core::Error),
+
+    /// Shared fence NT handle creation failed.
+    #[cfg(target_os = "windows")]
+    #[error("shared fence NT handle creation failed")]
+    SharedFenceHandleCreationFailed(#[source] windows::core::Error),
+
+    /// Keyed mutex is unavailable on the shareable texture.
+    #[cfg(target_os = "windows")]
+    #[error("IDXGIKeyedMutex unavailable on shareable texture")]
+    KeyedMutexUnavailable(#[source] windows::core::Error),
+
+    /// Keyed mutex acquire timed out.
+    #[cfg(target_os = "windows")]
+    #[error("IDXGIKeyedMutex::AcquireSync timed out")]
+    KeyedMutexAcquireTimeout,
+
+    /// Keyed mutex was abandoned during acquire.
+    #[cfg(target_os = "windows")]
+    #[error("IDXGIKeyedMutex::AcquireSync abandoned")]
+    KeyedMutexAbandoned,
+
+    /// Keyed mutex acquire failed.
+    #[cfg(target_os = "windows")]
+    #[error("IDXGIKeyedMutex::AcquireSync failed")]
+    KeyedMutexAcquireFailed(#[source] windows::core::Error),
+
+    /// Keyed mutex release failed.
+    #[cfg(target_os = "windows")]
+    #[error("IDXGIKeyedMutex::ReleaseSync failed")]
+    KeyedMutexReleaseFailed(#[source] windows::core::Error),
+
+    /// D3D11 fence wait failed.
+    #[cfg(target_os = "windows")]
+    #[error("ID3D11DeviceContext4::Wait failed")]
+    D3d11FenceWaitFailed(#[source] windows::core::Error),
+
+    /// D3D11 fence signal failed.
+    #[cfg(target_os = "windows")]
+    #[error("ID3D11DeviceContext4::Signal failed")]
+    D3d11FenceSignalFailed(#[source] windows::core::Error),
+
+    /// GPU copy submission failed.
+    #[cfg(target_os = "windows")]
+    #[error("D3D11 CopySubresourceRegion failed")]
+    D3d11CopySubresourceFailed(#[source] windows::core::Error),
 }
