@@ -1,0 +1,16 @@
+[package]
+name = "gpu-probe"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Isolated GPU capability probe for Do Vale Studio 4 (Experiment 0). Not part of production architecture."
+
+[[bin]]
+name = "gpu-probe"
+path = "src/main.rs"
+
+[dependencies]
+pollster = "0.4"
+wgpu = "27"
+
+[dev-dependencies]

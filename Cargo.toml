@@ -15,6 +15,9 @@ members = [
     "crates/dvs-project",
     "crates/dvs-export",
     "crates/dvs-ai",
+    "tests/gpu_probe",
+    "tests/gpu_nv12",
+    "tests/gpu_d3d11_interop",
 ]
 
 [workspace.package]

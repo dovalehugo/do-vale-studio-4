@@ -1,0 +1,63 @@
+---
+description: Core engineering rules for Do Vale Studio 4
+alwaysApply: true
+---
+
+# Do Vale Studio 4 Engineering Rules
+
+This is a professional native NLE.
+
+Read these files before major implementation work:
+
+- PROJECT_CONTEXT.md
+- ARCHITECTURE.md
+- DEVELOPMENT.md
+- PERFORMANCE.md
+- ROADMAP.md
+
+The project is GPU-first.
+
+The media pipeline must not assume CPU RGBA frames.
+
+Do not use HTML video elements.
+
+Do not use browser video rendering.
+
+Do not move video rendering into egui.
+
+egui is the application UI, not the video compositor.
+
+Hardware decoding must be preferred when available.
+
+Avoid GPU → CPU → GPU transfers.
+
+Do not claim zero-copy unless the frame actually remains GPU-resident.
+
+Do not add proxies as a primary solution for performance problems.
+
+Do not rewrite architecture without explaining the reason.
+
+Before major changes:
+
+1. inspect the existing code
+2. explain the proposed architecture
+3. identify performance implications
+4. identify threading implications
+5. identify memory ownership
+6. implement incrementally
+7. run tests
+8. update documentation
+
+Performance-critical code must be measurable.
+
+Avoid per-frame allocations.
+
+Avoid blocking the UI thread.
+
+Playback has priority over background processing.
+
+Keep core domain logic independent from UI and FFmpeg.
+
+Use small, testable modules.
+
+Prefer explicit types and errors over hidden state.

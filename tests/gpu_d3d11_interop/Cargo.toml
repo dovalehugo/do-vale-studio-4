@@ -1,0 +1,25 @@
+[package]
+name = "gpu-d3d11-interop"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Isolated D3D11VA → wgpu interop experiment (Experiment 2). Not part of production architecture."
+
+[[bin]]
+name = "gpu-d3d11-interop"
+path = "src/main.rs"
+
+[dependencies]
+ffmpeg-sys-next = "8"
+pollster = "0.4"
+wgpu = "27"
+winit = "0.30"
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Security",
+] }

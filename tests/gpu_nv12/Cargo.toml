@@ -1,0 +1,15 @@
+[package]
+name = "gpu-nv12"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Isolated GPU NV12→RGB rendering experiment (Experiment 1). Not part of production architecture."
+
+[[bin]]
+name = "gpu-nv12"
+path = "src/main.rs"
+
+[dependencies]
+pollster = "0.4"
+wgpu = "27"
+winit = "0.30"
