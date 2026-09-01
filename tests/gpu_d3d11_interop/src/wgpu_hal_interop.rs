@@ -2,15 +2,15 @@
 
 use std::sync::Arc;
 
-use windows::Win32::Foundation::HANDLE;
-use windows::Win32::Graphics::Direct3D12::{ID3D12Fence, ID3D12Resource};
 use wgpu::hal::api::Dx12;
 use wgpu::hal::dx12::Device as HalDx12Device;
 use wgpu::{
-    Backends, Device, DeviceDescriptor, ExperimentalFeatures, Features, Instance, InstanceDescriptor,
-    Limits, Queue, RequestAdapterOptions, Surface, SurfaceConfiguration, TextureDescriptor,
-    TextureDimension, TextureFormat, TextureUsages,
+    Backends, Device, DeviceDescriptor, ExperimentalFeatures, Features, Instance,
+    InstanceDescriptor, Limits, Queue, RequestAdapterOptions, Surface, SurfaceConfiguration,
+    TextureDescriptor, TextureDimension, TextureFormat, TextureUsages,
 };
+use windows::Win32::Foundation::HANDLE;
+use windows::Win32::Graphics::Direct3D12::{ID3D12Fence, ID3D12Resource};
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
@@ -103,7 +103,11 @@ fn format_hresult(operation: &str, error: windows::core::Error) -> String {
     )
 }
 
-fn failed_bundle(error: String, adapter_name: String, adapter_backend: String) -> WgpuHalInteropBundle {
+fn failed_bundle(
+    error: String,
+    adapter_name: String,
+    adapter_backend: String,
+) -> WgpuHalInteropBundle {
     WgpuHalInteropBundle {
         info: WgpuHalInteropInfo {
             wgpu_version: WGPU_VERSION.to_string(),
@@ -116,8 +120,9 @@ fn failed_bundle(error: String, adapter_name: String, adapter_backend: String) -
             fence_open_result: "skipped".to_string(),
             wgpu_queue_wait_result: "skipped".to_string(),
             create_texture_from_hal_result: "skipped".to_string(),
-            mechanism: "pre-init wgpu DX12 + OpenSharedHandle + texture_from_raw + create_texture_from_hal"
-                .to_string(),
+            mechanism:
+                "pre-init wgpu DX12 + OpenSharedHandle + texture_from_raw + create_texture_from_hal"
+                    .to_string(),
             interop_valid: false,
             step_status: "STEP 33 / 40: FAILED".to_string(),
             error: Some(error),
@@ -145,7 +150,9 @@ pub fn init_wgpu_dx12_context() -> Result<WgpuDx12Context, String> {
     }
 }
 
-pub(crate) async fn init_wgpu_context_with_window(window: Arc<Window>) -> Result<WgpuDx12Context, String> {
+pub(crate) async fn init_wgpu_context_with_window(
+    window: Arc<Window>,
+) -> Result<WgpuDx12Context, String> {
     let instance = Instance::new(&InstanceDescriptor {
         backends: Backends::DX12,
         ..Default::default()
@@ -197,13 +204,7 @@ pub(crate) async fn init_wgpu_context_with_window(window: Arc<Window>) -> Result
         .formats
         .iter()
         .copied()
-        .find(|f| {
-            f.is_srgb()
-                || matches!(
-                    f,
-                    TextureFormat::Bgra8Unorm | TextureFormat::Rgba8Unorm
-                )
-        })
+        .find(|f| f.is_srgb() || matches!(f, TextureFormat::Bgra8Unorm | TextureFormat::Rgba8Unorm))
         .unwrap_or(caps.formats[0]);
     let size = window.inner_size();
     let surface_config = SurfaceConfiguration {
@@ -417,7 +418,9 @@ pub fn import_shared_d3d12_nv12_into_wgpu(
             fence_open_result,
             wgpu_queue_wait_result,
             create_texture_from_hal_result: "OK".to_string(),
-            mechanism: "pre-init wgpu DX12 + OpenSharedHandle + texture_from_raw + create_texture_from_hal".to_string(),
+            mechanism:
+                "pre-init wgpu DX12 + OpenSharedHandle + texture_from_raw + create_texture_from_hal"
+                    .to_string(),
             interop_valid: true,
             step_status: "STEP 33 / 40: PASS".to_string(),
             error: None,
@@ -442,6 +445,23 @@ pub fn wait_cached_wgpu_fence(
             .raw_queue()
             .Wait(fence, value)
             .map_err(|e| format_hresult("wgpu D3D12 CommandQueue::Wait (cached fence)", e))?;
+    }
+    Ok(())
+}
+
+/// GPU-side Signal on wgpu-hal's exact raw/present queue (no probe D3D12 queue).
+pub fn signal_cached_wgpu_fence(
+    context: &WgpuDx12Context,
+    fence: &ID3D12Fence,
+    value: u64,
+) -> Result<(), String> {
+    let hal_device = unsafe { context.device.as_hal::<Dx12>() }
+        .ok_or_else(|| "device.as_hal::<Dx12>() returned None".to_string())?;
+    unsafe {
+        hal_device
+            .raw_queue()
+            .Signal(fence, value)
+            .map_err(|e| format_hresult("wgpu D3D12 CommandQueue::Signal (cached fence)", e))?;
     }
     Ok(())
 }

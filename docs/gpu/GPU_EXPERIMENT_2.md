@@ -3,7 +3,7 @@
 **Date:** 2026-09-01  
 **Machine:** Windows 10 22H2 (build 19045), AMD Ryzen 7 1700X, 32 GB RAM  
 **GPU:** AMD Radeon (TM) RX 580 8 GB  
-**Status:** **PASS EXCEPT HUMAN VISUAL VALIDATION** (architecture + automated corrective validation complete; human confirmation of rendered image still required)  
+**Status:** **PASS** (architecture, automated validation, and human continuous-playback validation complete)
 **Experiment package:** `tests/gpu_d3d11_interop`  
 **Fixture:** `docs/fixtures/test_4k_hevc_8bit30.mp4` (HEVC Main 3840×2160 30000/1001)
 
@@ -11,9 +11,62 @@
 
 ## Final classification
 
-**Automated:** PASS EXCEPT HUMAN VISUAL VALIDATION  
+| Phase | Status |
+|-------|--------|
+| Steps 1–32 (D3D11VA → shared fence) | **PASS** |
+| Steps 33–36 (wgpu import + first render) | **PASS** |
+| Steps 37–39 (90-frame wall-clock benchmark) | **PASS** |
+| Corrective bidirectional fence sync | **PASS** |
+| Human visual validation (`--visual`) | **PASS** |
+| **Experiment 2 final** | **PASS** |
 
-Architecture integrity remains proven. Corrective validation fixed fence reuse, frame accounting, wall-clock FPS measurement, and documentation accuracy. **Do not declare full Experiment 2 PASS until a human confirms the visual validation window shows correct fixture content.**
+---
+
+## Status history (do not conflate)
+
+### Earlier partial result (pre-diagnostic)
+
+After the first multi-frame corrective run, automated steps 37–39 passed and wall-clock throughput exceeded the fixture rate, but **`--visual` showed a solid green frame**. Human visual validation was **FAIL**. Final status was **PARTIAL** / **PASS EXCEPT HUMAN VISUAL VALIDATION**.
+
+### Diagnostic phase
+
+`--visual-diagnostic` isolated the failure:
+
+| Test | Result |
+|------|--------|
+| DIAG 3 — Synthetic NV12 control | Colors visible (surface/shader/bindings OK) |
+| DIAG 4 — Continuous real Plane0 | Black |
+| DIAG 5 — Continuous real Plane1 | Black |
+| DIAG 6 — Continuous real NV12 full | Solid green |
+| TEST 7 — Frozen real import (no keyed mutex) | Real frame visible |
+| TEST 8 — Frozen real import (keyed mutex) | Real frame visible |
+
+**Conclusion:** The imported NV12 resource and both planes are valid. The continuous path failed because the single shared texture was reused by D3D11 before D3D12/wgpu finished sampling it. Missing **D3D12→D3D11 reverse synchronization** caused zero/stale plane contents (Y≈0 → BT.709 limited-range clamp → green).
+
+**Keyed-mutex finding:** Missing `AcquireSync`/`ReleaseSync` participation was a real API-contract issue on `SHARED_NTHANDLE | SHARED_KEYEDMUTEX` textures, but it was **not** the differentiating cause — both frozen TEST 7 (no mutex) and TEST 8 (with mutex) displayed the real image.
+
+### Final corrected result
+
+Bidirectional shared timeline fence on the continuous path:
+
+```text
+D3D11 Wait(previous consumed)
+→ AcquireSync(0)
+→ CopySubresourceRegion
+→ ReleaseSync(0)
+→ D3D11 Signal(ready = 2N+1)
+→ wgpu raw/present queue Wait(ready)
+→ render / submit / present
+→ wgpu raw/present queue Signal(consumed = 2N+2)
+→ next D3D11 Wait(consumed)
+```
+
+Human validation (`cargo run -p gpu-d3d11-interop -- --visual`):
+
+- Real HEVC video plays continuously
+- Playback appears fluid
+- Solid green frame resolved
+- **Human visual validation: PASS**
 
 ---
 
@@ -28,7 +81,7 @@ HEVC 4K fixture
   → GPU CopySubresourceRegion → shareable D3D11 NV12 texture
   → NT shared HANDLE
   → ID3D12Resource (same adapter)
-  → shared GPU fence (D3D11 Signal → D3D12/wgpu Wait on cached fence)
+  → shared GPU fence (bidirectional D3D11 ↔ wgpu timeline)
   → wgpu-hal DX12 OpenSharedHandle + create_texture_from_hal
   → NV12 Plane0/Plane1 texture views
   → WGSL BT.709 limited-range YUV→RGB
@@ -82,7 +135,6 @@ This is a **GPU-resident pipeline**. It is **not** zero-copy — a GPU-to-GPU co
 
 - Hardware device: `d3d11va`
 - `get_format` selected: `AV_PIX_FMT_D3D11` (171)
-- Candidates observed: dxva2_vld, d3d11va_vld, d3d11, d3d12, vaapi, cuda, vulkan, yuv420p
 - `hw_frames_ctx` present; hardware format `d3d11`, software backing `nv12`
 
 ---
@@ -98,8 +150,6 @@ This is a **GPU-resident pipeline**. It is **not** zero-copy — a GPU-to-GPU co
 | ArraySize | 20 (decoder pool) |
 | BindFlags | 0x200 (`D3D11_BIND_DECODER`) |
 | MiscFlags | 0 (not shareable) |
-
-**Why decoder texture was not directly shareable:** Bind flags are decoder-only; no `D3D11_RESOURCE_MISC_SHARED_NTHANDLE`.
 
 ---
 
@@ -119,45 +169,44 @@ This is a **GPU-resident pipeline**. It is **not** zero-copy — a GPU-to-GPU co
 
 - Same adapter: AMD Radeon (TM) RX 580
 - `OpenSharedHandle` → `ID3D12Resource` NV12 3840×2176
-- Layout: `D3D12_TEXTURE_LAYOUT_UNKNOWN`
-- Flags: 0x20
 
 ---
 
-## 9. Keyed mutex experiment (failed)
+## 9. Keyed mutex
 
 - D3D11: `IDXGIKeyedMutex` available on shareable texture
-- D3D12: `QueryInterface` for `IDXGIKeyedMutex` on opened resource → **E_NOINTERFACE (0x80004002)**
-- **Not used** as final synchronization architecture
+- D3D12: `QueryInterface` for `IDXGIKeyedMutex` on opened resource → **E_NOINTERFACE** (not used for D3D12-side mutex)
+- **Continuous path:** D3D11 `AcquireSync(0, 5000)` → copy → `ReleaseSync(0)` (required by `SHARED_KEYEDMUTEX` contract)
+- **Diagnostic:** TEST 7 (no mutex) and TEST 8 (with mutex) both displayed frozen real frames — mutex was not the frozen-vs-continuous differentiator
 
 ---
 
-## 10. Shared GPU fence synchronization (validated)
+## 10. Shared GPU fence synchronization (final)
 
 - `ID3D11Device5` + `ID3D11DeviceContext4`: available
 - `ID3D11Fence` with `D3D11_FENCE_FLAG_SHARED`
-- Shared NT fence HANDLE created once
-- D3D12 and wgpu each open the shared fence **once** and retain `ID3D12Fence`
-- Per frame: D3D11 `Signal(n)` → D3D12/wgpu `Wait(cached_fence, n)` only (no re-open)
-- GPU-side only; no CPU wait used as proof
+- Shared NT fence HANDLE created once; D3D12/wgpu open **once** and retain `ID3D12Fence`
+- **Step 32 bootstrap:** D3D11 `Signal(1)` + probe D3D12 queue `Wait(1)` (validation only)
+- **Continuous path:** bidirectional timeline on wgpu-hal **raw/present queue only** (not the probe's separate D3D12 command queue)
+
+Per frame N (0-based):
+
+| Value | Formula |
+|-------|---------|
+| `ready` | `2N + 1` |
+| `consumed` | `2N + 2` |
+| D3D11 wait before reuse (N > 0) | `2N` (= previous `consumed`) |
+
+GPU-side only; no CPU polling or `WaitForSingleObject` as proof.
 
 ---
 
 ## 11. wgpu-hal DX12 external resource mechanism
 
-**Adapter selection (empirical, machine-specific):**
-
-On the tested Windows 10 + AMD Radeon RX 580 configuration, initializing and selecting the wgpu DX12 adapter **before** creating the FFmpeg/D3D11VA device was required for the experiment to consistently select the RX 580 rather than Microsoft Basic Render Driver. **This is an empirical machine/driver-specific observation and has not been established as a universal DXGI requirement.**
-
-**Mechanism used (wgpu 27.0.1 / wgpu-hal 27.0.4):**
-
-1. Pre-init wgpu DX12 with surface-based adapter selection (`request_adapter` + winit `run_app`, 1280×720 window)
-2. After decode/copy/fence: `device.as_hal::<Dx12>()`
-3. `raw_device().OpenSharedHandle` on the NT texture handle
-4. `raw_device().OpenSharedHandle` on the fence HANDLE **once**; retain `ID3D12Fence`
-5. `raw_queue().Wait` on cached fence
-6. `wgpu_hal::dx12::Device::texture_from_raw`
-7. `device.create_texture_from_hal::<Dx12>`
+1. Pre-init wgpu DX12 with surface-based adapter selection
+2. `device.as_hal::<Dx12>()` → `OpenSharedHandle` on texture + fence
+3. `raw_queue().Wait` / `raw_queue().Signal` on cached fence
+4. `texture_from_raw` + `create_texture_from_hal`
 
 Imported and wgpu-wrapped `ID3D12Resource` pointers matched (same COM object).
 
@@ -170,56 +219,77 @@ Imported and wgpu-wrapped `ID3D12Resource` pointers matched (same COM object).
 | Y | `TextureFormat::R8Unorm`, `TextureAspect::Plane0` |
 | UV | `TextureFormat::Rg8Unorm`, `TextureAspect::Plane1` |
 
-Both planes reference the real imported decoder NV12 resource.
-
 ---
 
 ## 13. WGSL YUV → RGB
 
 - Shader: `tests/gpu_d3d11_interop/shaders/nv12_to_rgb.wgsl`
-- Color space: BT.709
-- Range: limited (8-bit)
-- Visible crop: `VISIBLE_V_SCALE = 2160/2176` excludes decoder padding lines
+- Color space: BT.709, limited range
+- Visible crop: `2160/2176` excludes decoder padding
 
 ---
 
 ## 14. Multi-frame strategy
 
-- Bounded single shareable D3D11 NV12 texture (reused)
-- Bounded single shared fence HANDLE
-- Bounded single wgpu-imported `ID3D12Fence` (opened once)
-- Bounded single wgpu imported NV12 texture
+- **Single** bounded shareable D3D11 NV12 texture (reused)
+- **Single** shared fence HANDLE + cached `ID3D12Fence`
 - Measured run: exactly **90** decode → copy → sync → render → present cycles
-- Monotonic fence values starting after the Step 32/33 init signal
-- No unbounded HANDLE or texture allocation per frame
+- Monotonic fence timeline (`2N+1` / `2N+2`)
+- **Serialization:** one texture enforces producer/consumer handoff; multi-buffering may be evaluated later (not implemented)
 
 ---
 
 ## 15. Visual validation
 
-- Window: **1280×720** (16:9), not 256×256
-- Path: real NV12 planes + existing WGSL + present
-- Automated status after corrective run: **VISUAL VALIDATION READY**
-- **Human visual validation: PENDING** — a person must confirm fixture content, orientation, aspect, no green/purple corruption, chroma, crop, BT.709 appearance
-- API present success alone does **not** prove visual correctness
+| Mode | Command | Purpose |
+|------|---------|---------|
+| Continuous playback | `cargo run -p gpu-d3d11-interop -- --visual` | Human validation (PASS) |
+| Root-cause diagnostic | `cargo run -p gpu-d3d11-interop -- --visual-diagnostic` | Tests 1–8 (preserved) |
+
+Window: 1280×720. Human confirmed: real moving video, fluid playback, no green corruption.
 
 ---
 
-## 16. Performance measurements
+## 16. Final release benchmark metrics
 
-**Measurement type: WALL-CLOCK END-TO-END THROUGHPUT**  
-(Not GPU execution time — no GPU timestamp queries.)
+**Command:** `cargo run --release -p gpu-d3d11-interop`
+**Measurement type:** WALL-CLOCK END-TO-END THROUGHPUT (not GPU timestamp queries; not `--visual` refresh rate)
 
-Measured interval = exactly the 90-frame loop (decode + D3D11 copy submit + fence sync + wgpu submit + present).
+**Run date:** 2026-09-01 (final corrected build)
 
-Corrected values are produced by each run of `cargo run -p gpu-d3d11-interop` and printed as:
+| Metric | Value |
+|--------|-------|
+| Frames attempted | 90 |
+| Frames decoded | 90 |
+| GPU copies | 90 |
+| Frames rendered | 90 |
+| Present calls | 90 |
+| Dropped / failed frames | 0 |
+| Total elapsed | **1.474 s** (1473.70 ms) |
+| Average FPS (frames / elapsed) | **61.07** |
+| Average frame time | **16.37 ms** |
+| P50 / P95 / P99 frame time | Not implemented |
+| Fixture FPS target | ~29.97 (30000/1001) |
+| Throughput ≥ fixture rate | **YES** |
+| Hardware decoder | D3D11VA → `AV_PIX_FMT_D3D11` |
+| Adapter / GPU | AMD Radeon (TM) RX 580 (Dx12) |
+| Pixel format | NV12 3840×2176 allocation, 2160 visible |
+| Bidirectional timeline active | **YES** (diagnostics frames 0–4 logged) |
+| Keyed-mutex failures | None |
+| Fence failures | None |
+| Fence values used (continuous) | 180 (`2 × 90`) |
+| Cached fence OpenSharedHandle in loop | 0 |
 
-- `frames_processed`
-- `elapsed_seconds`
-- `FPS = frames_processed / elapsed_seconds`
-- whether FPS ≥ 30000/1001 (~29.97)
+**Phase breakdown (cumulative wall-clock):**
 
-Do not reuse older 61.77 FPS figures unless a new run reproduces them.
+| Phase | ms |
+|-------|-----|
+| Decode | 75.00 |
+| GPU copy | 23.06 |
+| Sync | 26.91 |
+| Render + present | 1369.75 |
+
+*Earlier pre-sync-correct run reported ~60.44 FPS over 1.489 s; final corrected run: 61.07 FPS over 1.474 s. Do not treat either as isolated GPU execution time.*
 
 ---
 
@@ -227,29 +297,32 @@ Do not reuse older 61.77 FPS figures unless a new run reproduces them.
 
 | Check | Result |
 |-------|--------|
-| `av_hwframe_transfer_data` in normal path | **NOT USED** |
-| swscale in normal path | **NOT USED** |
-| CPU RGBA conversion | **NOT USED** |
+| `av_hwframe_transfer_data` | **NOT USED** |
+| swscale | **NOT USED** |
+| CPU RGBA / YUV staging | **NOT USED** |
 | GPU → CPU → GPU | **NO** |
+| Software decode fallback | **NO** |
+| Synthetic substitution in `--visual` | **NO** |
 | GPU → GPU decoder-surface copy | **YES** |
 
 ---
 
 ## 18. Limitations
 
-1. **Adapter init ordering:** Empirical on this Windows 10 + RX 580 setup; not proven as a universal DXGI rule.
-2. **Unsafe HAL interop:** `create_texture_from_hal` / `texture_from_raw` require documented lifetime/sync invariants in production.
-3. **Decoder surface copy:** One GPU copy per frame from non-shareable decoder texture to shareable NV12.
-4. **Keyed mutex:** Not available on D3D12 for opened shared NV12 on RX 580.
-5. **Visual validation:** Requires human confirmation; automated PASS does not imply image quality PASS.
+1. **Single shared texture:** Producer and consumer are serialized per frame; throughput ceiling may improve with multi-buffering (future work).
+2. **Adapter init ordering:** Empirical on Windows 10 + RX 580; not proven as a universal DXGI rule.
+3. **Unsafe HAL interop:** `create_texture_from_hal` requires documented lifetime/sync invariants in production.
+4. **Decoder surface copy:** One GPU copy per frame from non-shareable decoder texture to shareable NV12.
+5. **D3D12 keyed mutex:** Not available on opened shared NV12; D3D11-side mutex used for producer contract only.
 6. **Wall-clock FPS** includes present and CPU submission, not isolated GPU timestamps.
+7. **No per-frame percentile stats** in the benchmark harness.
 
 ---
 
 ## 19. Future work
 
-- Human visual confirmation to upgrade status from PARTIAL / PASS-EXCEPT-VISUAL to full PASS
 - Integrate validated path into `dvs-gpu` / `dvs-render`
+- Evaluate multi-buffered shared textures (remove single-texture serialization)
 - Full 4K viewport scaling
 - Production fence/frame pool scheduling
 - Optional Vulkan interop path
@@ -260,10 +333,12 @@ Do not reuse older 61.77 FPS figures unless a new run reproduces them.
 
 | Path | Role |
 |------|------|
-| `tests/gpu_d3d11_interop/src/main.rs` | Steps 1–32 decode/interop probe |
-| `tests/gpu_d3d11_interop/src/wgpu_hal_interop.rs` | Step 33 wgpu import + cached fence |
+| `tests/gpu_d3d11_interop/src/main.rs` | Steps 1–32 probe, keyed-mutex copy, frozen import diagnostics |
+| `tests/gpu_d3d11_interop/src/wgpu_hal_interop.rs` | Step 33 import; wgpu queue Wait/Signal |
 | `tests/gpu_d3d11_interop/src/render_path.rs` | Steps 34–36 render |
-| `tests/gpu_d3d11_interop/src/multi_frame.rs` | Steps 37–39 validation |
+| `tests/gpu_d3d11_interop/src/multi_frame.rs` | Steps 37–39; `ContinuousFramebufferTimeline` |
+| `tests/gpu_d3d11_interop/src/visual_validation.rs` | `--visual` human validation |
+| `tests/gpu_d3d11_interop/src/visual_diagnostic.rs` | `--visual-diagnostic` tests 1–8 |
 | `tests/gpu_d3d11_interop/shaders/nv12_to_rgb.wgsl` | BT.709 shader with 2160/2176 crop |
 
 ---
@@ -272,12 +347,12 @@ Do not reuse older 61.77 FPS figures unless a new run reproduces them.
 
 | Step | Result |
 |------|--------|
-| 1–32 | PASS (D3D11VA through shared GPU fence) |
-| 33 | PASS (wgpu-hal DX12 external resource; fence cached) |
-| 34 | PASS (real NV12 plane views) |
-| 35 | PASS (GPU YUV→RGB shader) |
-| 36 | PASS (API present; visual correctness = human PENDING) |
-| 37 | PASS (exactly 90 measured real frames) |
+| 1–32 | PASS |
+| 33 | PASS |
+| 34 | PASS |
+| 35 | PASS |
+| 36 | PASS |
+| 37 | PASS (90 real frames, bidirectional sync) |
 | 38 | PASS (cached fence; bounded reuse) |
-| 39 | PASS when wall-clock FPS ≥ fixture rate |
-| 40 | Documentation corrected (this file) |
+| 39 | PASS (61.07 wall-clock FPS ≥ 29.97) |
+| 40 | PASS (documentation + human visual validation) |

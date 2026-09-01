@@ -9,6 +9,62 @@ use crate::wgpu_hal_interop::{self, WgpuDx12Context, WgpuHalInteropBundle};
 
 const TARGET_FRAMES: u32 = 90;
 const FIXTURE_FPS: f64 = 30_000.0 / 1_001.0;
+const FRAME_DIAG_LIMIT: u64 = 5;
+
+/// Monotonic shared-fence timeline for continuous playback.
+///
+/// Frame N: `ready = 2*N + 1`, `consumed = 2*N + 2`.
+/// D3D11 waits for the previous frame's `consumed` before reusing the texture.
+pub(crate) struct ContinuousFramebufferTimeline {
+    frame_index: u64,
+}
+
+impl ContinuousFramebufferTimeline {
+    pub fn new() -> Self {
+        Self { frame_index: 0 }
+    }
+
+    pub fn frame_index(&self) -> u64 {
+        self.frame_index
+    }
+
+    pub fn ready_value(&self) -> u64 {
+        2 * self.frame_index + 1
+    }
+
+    pub fn consumed_value(&self) -> u64 {
+        2 * self.frame_index + 2
+    }
+
+    pub fn wait_consumed_before_reuse(&self) -> Option<u64> {
+        if self.frame_index == 0 {
+            None
+        } else {
+            Some(2 * self.frame_index)
+        }
+    }
+
+    pub fn print_frame_diagnostics(&self) {
+        if self.frame_index >= FRAME_DIAG_LIMIT {
+            return;
+        }
+        let wait_consumed = self
+            .wait_consumed_before_reuse()
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "none".to_string());
+        let ready = self.ready_value();
+        let consumed = self.consumed_value();
+        println!("frame={}", self.frame_index);
+        println!("wait_consumed={wait_consumed}");
+        println!("ready_signal={ready}");
+        println!("wgpu_wait={ready}");
+        println!("consumed_signal={consumed}");
+    }
+
+    pub fn advance(&mut self) {
+        self.frame_index += 1;
+    }
+}
 
 pub struct MultiFrameReport {
     pub frames_decoded: u32,
@@ -46,17 +102,15 @@ pub fn run_steps_37_to_39(
         return Err("step 37 requires imported wgpu texture from step 33".to_string());
     }
 
-    let cached_fence = wgpu_interop
-        .cached_wgpu_fence
-        .as_ref()
-        .ok_or_else(|| "cached wgpu ID3D12Fence missing — OpenSharedHandle must run once at init".to_string())?;
+    let cached_fence = wgpu_interop.cached_wgpu_fence.as_ref().ok_or_else(|| {
+        "cached wgpu ID3D12Fence missing — OpenSharedHandle must run once at init".to_string()
+    })?;
 
     let mut frames_decoded = 0u32;
     let mut gpu_copies = 0u32;
     let mut frames_rendered = 0u32;
     let mut present_calls = 0u32;
-    // Step 32/33 already used fence value 1; measured run starts at 2.
-    let mut fence_value = 2u64;
+    let mut timeline = ContinuousFramebufferTimeline::new();
     let fence_open_shared_handle_calls_in_loop = 0u32;
     let mut decode_ms = 0.0;
     let mut copy_ms = 0.0;
@@ -71,7 +125,7 @@ pub fn run_steps_37_to_39(
             context,
             render,
             cached_fence,
-            fence_value,
+            &mut timeline,
             &mut frames_decoded,
             &mut gpu_copies,
             &mut frames_rendered,
@@ -81,7 +135,6 @@ pub fn run_steps_37_to_39(
             &mut sync_ms,
             &mut render_ms,
         )?;
-        fence_value += 1;
     }
 
     let total_ms = total_start.elapsed().as_secs_f64() * 1000.0;
@@ -92,7 +145,7 @@ pub fn run_steps_37_to_39(
         0.0
     };
     let throughput_ge_fixture = sustained_fps >= FIXTURE_FPS;
-    let measured_fence_values_used = fence_value - 2;
+    let measured_fence_values_used = timeline.frame_index() * 2;
 
     let step37_ok = frames_decoded == TARGET_FRAMES
         && gpu_copies == TARGET_FRAMES
@@ -121,7 +174,9 @@ pub fn run_steps_37_to_39(
         sustained_fps,
         throughput_ge_fixture,
         visual_validation: "USE --visual MODE".to_string(),
-        human_visual_validation: "PENDING".to_string(),
+        human_visual_validation:
+            "NOT MEASURED BY BENCHMARK — documented user-confirmed PASS via --visual (see docs/gpu/GPU_EXPERIMENT_2.md)"
+                .to_string(),
         resource_reuse: "BOUNDED".to_string(),
         leak_concern: "NONE — fence OpenSharedHandle once at init; Wait reuses cached ID3D12Fence"
             .to_string(),
@@ -137,14 +192,11 @@ pub fn run_steps_37_to_39(
         } else {
             format!(
                 "STEP 38 / 40: FAIL — init opens={} loop opens={}",
-                wgpu_interop.fence_open_shared_handle_calls,
-                fence_open_shared_handle_calls_in_loop
+                wgpu_interop.fence_open_shared_handle_calls, fence_open_shared_handle_calls_in_loop
             )
         },
         step39_status: if step39_ok {
-            format!(
-                "STEP 39 / 40: PASS — wall-clock {sustained_fps:.2} FPS >= {FIXTURE_FPS:.2}"
-            )
+            format!("STEP 39 / 40: PASS — wall-clock {sustained_fps:.2} FPS >= {FIXTURE_FPS:.2}")
         } else {
             format!(
                 "STEP 39 / 40: FAIL — wall-clock {sustained_fps:.2} FPS (target {FIXTURE_FPS:.2})"
@@ -158,7 +210,7 @@ pub(crate) fn process_one_real_frame(
     context: &WgpuDx12Context,
     render: &RenderPathBundle,
     cached_fence: &ID3D12Fence,
-    fence_value: u64,
+    timeline: &mut ContinuousFramebufferTimeline,
     frames_decoded: &mut u32,
     gpu_copies: &mut u32,
     frames_rendered: &mut u32,
@@ -167,6 +219,53 @@ pub(crate) fn process_one_real_frame(
     copy_ms: &mut f64,
     sync_ms: &mut f64,
     render_ms: &mut f64,
+) -> Result<(), String> {
+    decode_copy_and_sync(
+        probe,
+        context,
+        cached_fence,
+        timeline,
+        frames_decoded,
+        gpu_copies,
+        decode_ms,
+        copy_ms,
+        sync_ms,
+    )?;
+
+    let render_start = Instant::now();
+    crate::render_path::present_nv12_frame(context, &render.pipeline, &render.bind_group)?;
+    *render_ms += render_start.elapsed().as_secs_f64() * 1000.0;
+    *frames_rendered += 1;
+    *present_calls += 1;
+
+    finish_continuous_frame_consumer(context, cached_fence, timeline)?;
+
+    Ok(())
+}
+
+/// Signal `consumed` on wgpu's raw queue after the render pass has been submitted.
+pub(crate) fn finish_continuous_frame_consumer(
+    context: &WgpuDx12Context,
+    cached_fence: &ID3D12Fence,
+    timeline: &mut ContinuousFramebufferTimeline,
+) -> Result<(), String> {
+    wgpu_hal_interop::signal_cached_wgpu_fence(context, cached_fence, timeline.consumed_value())?;
+    timeline.print_frame_diagnostics();
+    timeline.advance();
+    Ok(())
+}
+
+/// Decode → D3D11 producer sync → wgpu Wait(ready). Consumer signals after present.
+pub(crate) fn decode_copy_and_sync(
+    probe: &mut crate::ProbeResult,
+    context: &WgpuDx12Context,
+    cached_fence: &ID3D12Fence,
+    timeline: &mut ContinuousFramebufferTimeline,
+    frames_decoded: &mut u32,
+    gpu_copies: &mut u32,
+    decode_ms: &mut f64,
+    copy_ms: &mut f64,
+    sync_ms: &mut f64,
 ) -> Result<(), String> {
     let decode_start = Instant::now();
     let frame_info = crate::decode_next_d3d11_frame(
@@ -188,30 +287,33 @@ pub(crate) fn process_one_real_frame(
     *frames_decoded += 1;
 
     let inspection = crate::inspect_d3d11_frame(&probe._av_frame)?;
+    let shareable = probe
+        ._shareable_texture
+        .as_ref()
+        .ok_or_else(|| "shareable texture missing".to_string())?;
+
+    let sync_start = Instant::now();
+    if let Some(wait_consumed) = timeline.wait_consumed_before_reuse() {
+        probe.shared_fence_sync.wait_d3d11_fence(wait_consumed)?;
+    }
+
     let copy_start = Instant::now();
-    let _gpu_copy = crate::copy_decoder_slice_to_shareable(
+    let _gpu_copy = crate::copy_decoder_to_shareable_keyed(
         &probe._av_frame,
         &inspection,
         &probe.texture_desc,
-        probe
-            ._shareable_texture
-            .as_ref()
-            .ok_or_else(|| "shareable texture missing".to_string())?,
+        shareable,
         &probe.shareable_texture.desc,
     )?;
     *copy_ms += copy_start.elapsed().as_secs_f64() * 1000.0;
     *gpu_copies += 1;
 
-    let sync_start = Instant::now();
-    probe.shared_fence_sync.signal_and_wait(fence_value)?;
-    wgpu_hal_interop::wait_cached_wgpu_fence(context, cached_fence, fence_value)?;
+    let ready_value = timeline.ready_value();
+    probe
+        .shared_fence_sync
+        .signal_d3d11_fence_only(ready_value)?;
+    wgpu_hal_interop::wait_cached_wgpu_fence(context, cached_fence, ready_value)?;
     *sync_ms += sync_start.elapsed().as_secs_f64() * 1000.0;
-
-    let render_start = Instant::now();
-    crate::render_path::present_nv12_frame(context, &render.pipeline, &render.bind_group)?;
-    *render_ms += render_start.elapsed().as_secs_f64() * 1000.0;
-    *frames_rendered += 1;
-    *present_calls += 1;
 
     Ok(())
 }
@@ -227,7 +329,10 @@ pub fn print_multi_frame_report(report: &MultiFrameReport) {
     println!("{}", report.step37_status);
     println!();
     println!("=== Lifetime + synchronization stability ===");
-    println!("cached D3D12 fence:     {}", if report.cached_fence { "YES" } else { "NO" });
+    println!(
+        "cached D3D12 fence:     {}",
+        if report.cached_fence { "YES" } else { "NO" }
+    );
     println!(
         "OpenSharedHandle fence calls at init: {}",
         report.fence_open_shared_handle_calls_at_init
@@ -238,7 +343,7 @@ pub fn print_multi_frame_report(report: &MultiFrameReport) {
     );
     println!("bounded shareable texture: reused");
     println!("bounded fence HANDLE:    reused");
-    println!("monotonic fence values:  yes");
+    println!("monotonic fence values:  yes (2*N+1 ready, 2*N+2 consumed)");
     println!("resource reuse:          {}", report.resource_reuse);
     println!("leak concern:            {}", report.leak_concern);
     println!();
@@ -247,16 +352,20 @@ pub fn print_multi_frame_report(report: &MultiFrameReport) {
     println!("=== Performance validation ===");
     println!("Measurement type:       WALL-CLOCK END-TO-END THROUGHPUT");
     println!("(NOT GPU execution time — no GPU timestamp queries)");
-    println!("wall-clock elapsed:     {:.3} s ({:.2} ms)", report.elapsed_seconds, report.total_ms);
-    println!("frames_processed:       {}", report.frames_rendered);
     println!(
-        "FPS = frames/elapsed:   {:.2}",
-        report.sustained_fps
+        "wall-clock elapsed:     {:.3} s ({:.2} ms)",
+        report.elapsed_seconds, report.total_ms
     );
+    println!("frames_processed:       {}", report.frames_rendered);
+    println!("FPS = frames/elapsed:   {:.2}", report.sustained_fps);
     println!("fixture FPS:            ~{:.2} (30000/1001)", FIXTURE_FPS);
     println!(
         "throughput >= fixture:  {}",
-        if report.throughput_ge_fixture { "YES" } else { "NO" }
+        if report.throughput_ge_fixture {
+            "YES"
+        } else {
+            "NO"
+        }
     );
     println!("decode phase:           {:.2} ms", report.decode_ms);
     println!("GPU copy phase:         {:.2} ms", report.copy_ms);
@@ -273,5 +382,8 @@ pub fn print_multi_frame_report(report: &MultiFrameReport) {
     println!("{}", report.step39_status);
     println!();
     println!("Visual validation window: {}", report.visual_validation);
-    println!("Human visual validation:  {}", report.human_visual_validation);
+    println!(
+        "Human visual validation:  {}",
+        report.human_visual_validation
+    );
 }

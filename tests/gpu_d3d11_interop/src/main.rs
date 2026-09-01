@@ -5,30 +5,30 @@
 
 mod multi_frame;
 mod render_path;
+mod visual_diagnostic;
 mod visual_validation;
 mod wgpu_hal_interop;
+use ffmpeg_sys_next as ffmpeg;
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::process::ExitCode;
-use ffmpeg_sys_next as ffmpeg;
-use windows::core::{Interface, PCWSTR};
 use windows::Win32::Foundation::{CloseHandle, GENERIC_ALL, HANDLE, INVALID_HANDLE_VALUE};
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11_BIND_SHADER_RESOURCE, D3D11_FENCE_FLAG_SHARED,
-    D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX, D3D11_RESOURCE_MISC_SHARED_NTHANDLE,
-    D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, ID3D11DeviceContext4, ID3D11Device5, ID3D11Fence,
-    ID3D11Texture2D,
+    D3D11_BIND_SHADER_RESOURCE, D3D11_FENCE_FLAG_SHARED, D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX,
+    D3D11_RESOURCE_MISC_SHARED_NTHANDLE, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, ID3D11Device5,
+    ID3D11DeviceContext4, ID3D11Fence, ID3D11Texture2D,
 };
 use windows::Win32::Graphics::Direct3D12::{
-    D3D12CreateDevice, D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC,
-    D3D12_COMMAND_QUEUE_FLAG_NONE, ID3D12CommandQueue, ID3D12Device, ID3D12Fence, ID3D12Resource,
+    D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC, D3D12_COMMAND_QUEUE_FLAG_NONE,
+    D3D12CreateDevice, ID3D12CommandQueue, ID3D12Device, ID3D12Fence, ID3D12Resource,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_NV12, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::{
-    DXGI_ADAPTER_DESC, DXGI_SHARED_RESOURCE_READ, DXGI_SHARED_RESOURCE_WRITE, IDXGIDevice,
-    IDXGIResource1,
+    DXGI_ADAPTER_DESC, DXGI_ERROR_WAIT_TIMEOUT, DXGI_SHARED_RESOURCE_READ,
+    DXGI_SHARED_RESOURCE_WRITE, IDXGIDevice, IDXGIKeyedMutex, IDXGIResource1,
 };
+use windows::core::{Interface, PCWSTR};
 
 const FIXTURE_REL: &str = "docs/fixtures/test_4k_hevc_8bit30.mp4";
 const SETUP_DOC: &str = "docs/ffmpeg/FFMPEG_SETUP_WINDOWS.md";
@@ -49,11 +49,7 @@ fn try_ffmpeg_runtime_version() -> Option<String> {
         if ptr.is_null() {
             return None;
         }
-        Some(
-            std::ffi::CStr::from_ptr(ptr)
-                .to_string_lossy()
-                .into_owned(),
-        )
+        Some(std::ffi::CStr::from_ptr(ptr).to_string_lossy().into_owned())
     }
 }
 
@@ -107,10 +103,7 @@ impl FfmpegDevLayout {
             Some(dir) => println!("  FFMPEG_DIR:      {}", dir.display()),
             None => println!("  FFMPEG_DIR:      (not set)"),
         }
-        println!(
-            "  include/avcodec: {}",
-            status_label(self.include_ok)
-        );
+        println!("  include/avcodec: {}", status_label(self.include_ok));
         println!("  lib/avcodec.lib: {}", status_label(self.lib_ok));
         println!("  bin/ffmpeg.exe:  {}", status_label(self.bin_ok));
         println!(
@@ -127,11 +120,7 @@ impl FfmpegDevLayout {
 }
 
 fn status_label(ok: bool) -> &'static str {
-    if ok {
-        "OK"
-    } else {
-        "MISSING"
-    }
+    if ok { "OK" } else { "MISSING" }
 }
 
 fn ffmpeg_error(code: i32) -> String {
@@ -247,7 +236,12 @@ impl FormatContext {
 
         let mut ctx: *mut ffmpeg::AVFormatContext = std::ptr::null_mut();
         let ret = unsafe {
-            ffmpeg::avformat_open_input(&mut ctx, path_c.as_ptr(), std::ptr::null(), std::ptr::null_mut())
+            ffmpeg::avformat_open_input(
+                &mut ctx,
+                path_c.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null_mut(),
+            )
         };
         if ret < 0 {
             return ffmpeg_err(ret);
@@ -441,7 +435,26 @@ impl SharedFenceSyncBundle {
             .map(OwnedNtHandle::handle)
     }
 
-    pub(crate) fn signal_and_wait(&self, value: u64) -> Result<(), String> {
+    /// GPU queue wait on the shared D3D11 fence (no CPU polling).
+    pub(crate) fn wait_d3d11_fence(&self, value: u64) -> Result<(), String> {
+        let context4 = self
+            ._d3d11_context4
+            .as_ref()
+            .ok_or_else(|| "D3D11 context4 unavailable for fence wait".to_string())?;
+        let d3d11_fence = self
+            ._d3d11_fence
+            .as_ref()
+            .ok_or_else(|| "D3D11 fence unavailable".to_string())?;
+        unsafe {
+            context4
+                .Wait(d3d11_fence, value)
+                .map_err(|e| format_hresult("ID3D11DeviceContext4::Wait", e))?;
+        }
+        Ok(())
+    }
+
+    /// Signal the shared D3D11 fence without Waiting on the probe D3D12 queue.
+    pub(crate) fn signal_d3d11_fence_only(&self, value: u64) -> Result<(), String> {
         let context4 = self
             ._d3d11_context4
             .as_ref()
@@ -450,24 +463,18 @@ impl SharedFenceSyncBundle {
             ._d3d11_fence
             .as_ref()
             .ok_or_else(|| "D3D11 fence unavailable".to_string())?;
-        let d3d12_fence = self
-            ._d3d12_fence
-            .as_ref()
-            .ok_or_else(|| "D3D12 fence unavailable".to_string())?;
-        let command_queue = self
-            ._d3d12_command_queue
-            .as_ref()
-            .ok_or_else(|| "D3D12 command queue unavailable".to_string())?;
-
         unsafe {
             context4
                 .Signal(d3d11_fence, value)
                 .map_err(|e| format_hresult("ID3D11DeviceContext4::Signal", e))?;
-            command_queue
-                .Wait(d3d12_fence, value)
-                .map_err(|e| format_hresult("ID3D12CommandQueue::Wait", e))?;
         }
         Ok(())
+    }
+
+    pub(crate) fn d3d12_command_queue_ptr(&self) -> Option<usize> {
+        self._d3d12_command_queue
+            .as_ref()
+            .map(|q| Interface::as_raw(q) as usize)
     }
 }
 
@@ -730,7 +737,10 @@ pub(crate) fn inspect_d3d11_frame(frame: &AvFrame) -> Result<D3d11FrameInspectio
     }
 }
 
-fn d3d11_texture_desc_from_raw(desc: &D3D11_TEXTURE2D_DESC, array_slice_index: i32) -> D3d11TextureDesc {
+fn d3d11_texture_desc_from_raw(
+    desc: &D3D11_TEXTURE2D_DESC,
+    array_slice_index: i32,
+) -> D3d11TextureDesc {
     D3d11TextureDesc {
         width: desc.Width,
         height: desc.Height,
@@ -816,6 +826,165 @@ pub(crate) fn copy_decoder_slice_to_shareable(
             dest_height: dest_desc.height,
         })
     }
+}
+
+/// Diagnostic-only: one real decode+copy into the shared NV12, then stop writing.
+///
+/// `with_keyed_mutex`:
+/// - false = TEST 7 (no Acquire/Release)
+/// - true  = TEST 8 (AcquireSync → copy → Flush → ReleaseSync)
+///
+/// Sync: D3D11 Signal(fence) then Wait on wgpu-hal present queue only (not the probe queue).
+pub(crate) fn diagnostic_frozen_real_import(
+    probe: &mut ProbeResult,
+    context: &wgpu_hal_interop::WgpuDx12Context,
+    cached_fence: &ID3D12Fence,
+    fence_value: u64,
+    with_keyed_mutex: bool,
+) -> Result<(), String> {
+    let mut frame_info = decode_next_d3d11_frame(
+        &probe._fmt,
+        &probe._decoder,
+        probe.stream.stream_index,
+        &mut probe._av_frame,
+    )?;
+    if frame_info.is_none() {
+        restart_fixture_decode(probe)?;
+        frame_info = decode_next_d3d11_frame(
+            &probe._fmt,
+            &probe._decoder,
+            probe.stream.stream_index,
+            &mut probe._av_frame,
+        )?;
+    }
+    let Some(frame_info) = frame_info else {
+        return Err("EOF: could not decode a frame for frozen import".to_string());
+    };
+    if !frame_info.is_d3d11 {
+        return Err(format!(
+            "frame is not AV_PIX_FMT_D3D11 ({})",
+            frame_info.format_name
+        ));
+    }
+    finish_frozen_copy(probe, context, cached_fence, fence_value, with_keyed_mutex)
+}
+
+fn finish_frozen_copy(
+    probe: &mut ProbeResult,
+    context: &wgpu_hal_interop::WgpuDx12Context,
+    cached_fence: &ID3D12Fence,
+    fence_value: u64,
+    with_keyed_mutex: bool,
+) -> Result<(), String> {
+    let inspection = inspect_d3d11_frame(&probe._av_frame)?;
+    let shareable = probe
+        ._shareable_texture
+        .as_ref()
+        .ok_or_else(|| "shareable texture missing".to_string())?;
+
+    let keyed_mutex = if with_keyed_mutex {
+        Some(query_keyed_mutex(shareable)?)
+    } else {
+        None
+    };
+
+    if let Some(mutex) = keyed_mutex.as_ref() {
+        println!("TEST 8: IDXGIKeyedMutex::AcquireSync(key=0, timeout_ms=5000)...");
+        match unsafe { mutex.AcquireSync(0, 5000) } {
+            Ok(()) => {
+                println!("AcquireSync: OK (S_OK / success)");
+            }
+            Err(e) => {
+                let code = e.code().0 as u32;
+                if e.code() == DXGI_ERROR_WAIT_TIMEOUT {
+                    return Err(format!(
+                        "AcquireSync FAILED: DXGI_ERROR_WAIT_TIMEOUT (HRESULT=0x{code:08X})"
+                    ));
+                }
+                return Err(format!(
+                    "AcquireSync FAILED: {e} (HRESULT=0x{code:08X}) — treat as non-success"
+                ));
+            }
+        }
+    } else {
+        println!("TEST 7: keyed-mutex Acquire/Release NOT used (isolated variable)");
+    }
+
+    let copy_result = copy_decoder_slice_to_shareable(
+        &probe._av_frame,
+        &inspection,
+        &probe.texture_desc,
+        shareable,
+        &probe.shareable_texture.desc,
+    );
+
+    if let Some(mutex) = keyed_mutex.as_ref() {
+        // Release even if copy failed so the mutex is not left held.
+        println!("TEST 8: IDXGIKeyedMutex::ReleaseSync(key=0)...");
+        match unsafe { mutex.ReleaseSync(0) } {
+            Ok(()) => println!("ReleaseSync: OK (S_OK / success)"),
+            Err(e) => {
+                let code = e.code().0 as u32;
+                let release_err = format!(
+                    "ReleaseSync FAILED: {e} (HRESULT=0x{code:08X}) — treat as non-success"
+                );
+                let _ = copy_result?;
+                return Err(release_err);
+            }
+        }
+    }
+
+    let _gpu_copy = copy_result?;
+    println!(
+        "Frozen CopySubresourceRegion + Flush: OK (array_slice={})",
+        inspection.texture_array_index
+    );
+
+    probe
+        .shared_fence_sync
+        .signal_d3d11_fence_only(fence_value)?;
+    println!("D3D11 shared fence Signal({fence_value}): OK");
+
+    wgpu_hal_interop::wait_cached_wgpu_fence(context, cached_fence, fence_value)?;
+    println!("wgpu-hal present/raw queue Wait({fence_value}): OK (probe D3D12 queue Wait skipped)");
+    println!("Frozen import complete — subsequent frames will NOT issue D3D11 writes.");
+    Ok(())
+}
+
+fn query_keyed_mutex(shareable: &OwnedD3d11Texture2D) -> Result<IDXGIKeyedMutex, String> {
+    shareable
+        .0
+        .cast::<IDXGIKeyedMutex>()
+        .map_err(|e| format_hresult("ID3D11Texture2D::cast<IDXGIKeyedMutex>", e))
+}
+
+/// Continuous-playback producer: keyed-mutex guarded GPU copy into the shareable NV12.
+pub(crate) fn copy_decoder_to_shareable_keyed(
+    av_frame: &AvFrame,
+    inspection: &D3d11FrameInspection,
+    texture_desc: &D3d11TextureDesc,
+    shareable: &OwnedD3d11Texture2D,
+    shareable_desc: &D3d11TextureDesc,
+) -> Result<GpuCopyInfo, String> {
+    let mutex = query_keyed_mutex(shareable)?;
+    unsafe {
+        mutex
+            .AcquireSync(0, 5000)
+            .map_err(|e| format_hresult("IDXGIKeyedMutex::AcquireSync", e))?;
+    }
+    let copy_result = copy_decoder_slice_to_shareable(
+        av_frame,
+        inspection,
+        texture_desc,
+        shareable,
+        shareable_desc,
+    );
+    unsafe {
+        mutex
+            .ReleaseSync(0)
+            .map_err(|e| format_hresult("IDXGIKeyedMutex::ReleaseSync", e))?;
+    }
+    copy_result
 }
 
 fn create_shareable_nv12_texture(
@@ -1115,11 +1284,8 @@ fn establish_shared_gpu_fence_sync(
             }
         };
 
-        let fence_handle = match d3d11_fence.CreateSharedHandle(
-            None,
-            GENERIC_ALL.0,
-            PCWSTR::null(),
-        ) {
+        let fence_handle = match d3d11_fence.CreateSharedHandle(None, GENERIC_ALL.0, PCWSTR::null())
+        {
             Ok(handle) => handle,
             Err(e) => {
                 return failed_fence_sync_bundle(
@@ -1617,7 +1783,11 @@ fn print_decoder_info(info: &DecoderInfo) {
     println!("hardware device:    {}", info.hw_device_type);
     println!(
         "D3D11VA device:     {}",
-        if info.d3d11va_device_ok { "OK" } else { "FAILED" }
+        if info.d3d11va_device_ok {
+            "OK"
+        } else {
+            "FAILED"
+        }
     );
     println!("decoder name:       {}", info.decoder_name);
     println!("codec_id:           {}", info.codec_id as i32);
@@ -1632,7 +1802,9 @@ fn print_decoder_info(info: &DecoderInfo) {
     }
     println!(
         "get_format selected:  {}",
-        info.get_format_selected.as_deref().unwrap_or("AV_PIX_FMT_NONE")
+        info.get_format_selected
+            .as_deref()
+            .unwrap_or("AV_PIX_FMT_NONE")
     );
     println!(
         "codec_ctx.pix_fmt:    {} ({})",
@@ -1642,10 +1814,7 @@ fn print_decoder_info(info: &DecoderInfo) {
 
 fn print_decoded_frame_info(info: &DecodedFrameInfo) {
     println!("=== First decoded frame ===");
-    println!(
-        "frame format:       {} ({})",
-        info.format, info.format_name
-    );
+    println!("frame format:       {} ({})", info.format, info.format_name);
     println!("frame width x height: {} x {}", info.width, info.height);
     println!("frame pts:          {}", info.pts);
     println!(
@@ -1660,7 +1829,11 @@ fn print_d3d11_inspection(info: &D3d11FrameInspection) {
     println!("D3D11 texture array index: {}", info.texture_array_index);
     println!(
         "hw_frames_ctx present: {}",
-        if info.hw_frames_ctx_present { "yes" } else { "no" }
+        if info.hw_frames_ctx_present {
+            "yes"
+        } else {
+            "no"
+        }
     );
     println!("hw format: {}", info.hw_format);
     println!("sw format: {}", info.sw_format);
@@ -1676,12 +1849,18 @@ fn print_texture_desc(info: &D3d11TextureDesc) {
     println!("SampleDesc.Count:   {}", info.sample_count);
     println!("SampleDesc.Quality: {}", info.sample_quality);
     println!("Usage:              {}", info.usage);
-    println!("BindFlags:          0x{:x} ({})", info.bind_flags, info.bind_flags);
+    println!(
+        "BindFlags:          0x{:x} ({})",
+        info.bind_flags, info.bind_flags
+    );
     println!(
         "CPUAccessFlags:     0x{:x} ({})",
         info.cpu_access_flags, info.cpu_access_flags
     );
-    println!("MiscFlags:          0x{:x} ({})", info.misc_flags, info.misc_flags);
+    println!(
+        "MiscFlags:          0x{:x} ({})",
+        info.misc_flags, info.misc_flags
+    );
     println!("decoded array slice index: {}", info.array_slice_index);
 }
 
@@ -1723,19 +1902,34 @@ fn print_shared_fence_sync(bundle: &SharedFenceSyncBundle) {
     );
     println!(
         "D3D11 fence creation:       {}",
-        if info.fence_creation_ok { "OK" } else { "FAILED" }
+        if info.fence_creation_ok {
+            "OK"
+        } else {
+            "FAILED"
+        }
     );
-    println!("shared fence HANDLE:        0x{:016X}", info.shared_fence_handle);
+    println!(
+        "shared fence HANDLE:        0x{:016X}",
+        info.shared_fence_handle
+    );
     println!(
         "D3D12 OpenSharedHandle fence: {}",
-        if info.d3d12_fence_open_ok { "OK" } else { "FAILED" }
+        if info.d3d12_fence_open_ok {
+            "OK"
+        } else {
+            "FAILED"
+        }
     );
     println!("D3D11 Signal:               {}", info.signal_result);
     println!("D3D12 CommandQueue::Wait:   {}", info.wait_result);
     println!("synchronization mechanism:  {}", info.mechanism);
     println!(
         "cross-API synchronization valid: {}",
-        if info.synchronization_valid { "yes" } else { "no" }
+        if info.synchronization_valid {
+            "yes"
+        } else {
+            "no"
+        }
     );
     if let Some(err) = &info.error {
         println!("error:                      {err}");
@@ -1748,7 +1942,11 @@ fn print_d3d12_open_shared(info: &D3d12OpenSharedInfo) {
     println!("=== D3D12 OpenSharedHandle ===");
     println!(
         "D3D12 device creation:  {}",
-        if info.device_creation_ok { "OK" } else { "FAILED" }
+        if info.device_creation_ok {
+            "OK"
+        } else {
+            "FAILED"
+        }
     );
     println!("adapter name:           {}", info.adapter_name);
     println!(
@@ -1810,7 +2008,10 @@ fn print_shareable_texture(info: &ShareableTextureInfo) {
         "creation result:    {}",
         if info.creation_ok { "OK" } else { "FAILED" }
     );
-    println!("Width x Height:     {} x {}", info.desc.width, info.desc.height);
+    println!(
+        "Width x Height:     {} x {}",
+        info.desc.width, info.desc.height
+    );
     println!("ArraySize:          {}", info.desc.array_size);
     println!("DXGI Format:        {}", info.desc.dxgi_format);
     println!(
@@ -1827,7 +2028,11 @@ fn print_shareable_texture(info: &ShareableTextureInfo) {
     );
     println!(
         "SHARED_NTHANDLE:    {}",
-        if info.has_shared_nthandle { "present" } else { "missing" }
+        if info.has_shared_nthandle {
+            "present"
+        } else {
+            "missing"
+        }
     );
 }
 
@@ -1873,7 +2078,14 @@ fn print_final_experiment_report(multi: &multi_frame::MultiFrameReport) {
     println!("29.97 approximately");
     println!();
     println!("Throughput >= fixture rate:");
-    println!("{}", if multi.throughput_ge_fixture { "YES" } else { "NO" });
+    println!(
+        "{}",
+        if multi.throughput_ge_fixture {
+            "YES"
+        } else {
+            "NO"
+        }
+    );
     println!();
     println!("av_hwframe_transfer_data:");
     println!("NOT USED");
@@ -1909,12 +2121,14 @@ fn print_final_experiment_report(multi: &multi_frame::MultiFrameReport) {
     if multi.step37_status.contains("PASS")
         && multi.step38_status.contains("PASS")
         && multi.step39_status.contains("PASS")
-        && multi.human_visual_validation == "PENDING"
     {
-        println!("PASS EXCEPT HUMAN VISUAL VALIDATION");
+        println!("PASS");
     } else {
         println!("FAILED");
     }
+    println!();
+    println!("Human visual validation (benchmark does not measure):");
+    println!("{}", multi.human_visual_validation);
     println!();
     println!("==================================================");
 }
@@ -1956,6 +2170,19 @@ fn main() -> ExitCode {
     println!();
 
     let visual_mode = std::env::args().any(|a| a == "--visual");
+    let visual_diagnostic_mode = std::env::args().any(|a| a == "--visual-diagnostic");
+
+    if blockers.is_empty() && visual_diagnostic_mode {
+        println!("STATUS: VISUAL DIAGNOSTIC MODE");
+        println!();
+        match visual_diagnostic::run_visual_diagnostic(&fixture) {
+            Ok(()) => return ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("visual diagnostic error: {err}");
+                return ExitCode::from(3);
+            }
+        }
+    }
 
     if blockers.is_empty() && visual_mode {
         println!("STATUS: VISUAL VALIDATION MODE");
@@ -2054,7 +2281,6 @@ fn main() -> ExitCode {
                                 {
                                     println!();
                                     print_final_experiment_report(&multi_report);
-                                    // Do not declare full Experiment 2 PASS until human visual confirmation.
                                     ExitCode::SUCCESS
                                 } else {
                                     println!();
@@ -2098,7 +2324,6 @@ mod tests {
     #[test]
     fn fixture_path_is_under_repo_root() {
         let path = fixture_path();
-        assert!(path.ends_with(FIXTURE_REL.replace('/', "\\"))
-            || path.ends_with(FIXTURE_REL));
+        assert!(path.ends_with(FIXTURE_REL.replace('/', "\\")) || path.ends_with(FIXTURE_REL));
     }
 }

@@ -1,8 +1,6 @@
 //! Steps 34–36 — real NV12 plane access, GPU YUV→RGB, first frame render.
 
-use wgpu::{
-    TextureAspect, TextureFormat, TextureView, TextureViewDescriptor,
-};
+use wgpu::{TextureAspect, TextureFormat, TextureView, TextureViewDescriptor};
 
 use crate::wgpu_hal_interop::{WgpuDx12Context, WgpuHalInteropBundle};
 
@@ -60,14 +58,10 @@ pub fn run_render_path_steps_34_to_36(
 
     let (y_view, uv_view, plane_access) = create_real_nv12_plane_views(texture)?;
     if !plane_access.y_view_ok || !plane_access.uv_view_ok {
-        return Err(format!(
-            "step 34 failed: {}",
-            plane_access.step_status
-        ));
+        return Err(format!("step 34 failed: {}", plane_access.step_status));
     }
 
-    let (shader_path, pipeline, bind_group) =
-        build_nv12_shader_path(context, &y_view, &uv_view)?;
+    let (shader_path, pipeline, bind_group) = build_nv12_shader_path(context, &y_view, &uv_view)?;
     if !shader_path.pipeline_ok {
         return Err(shader_path.step_status.clone());
     }
@@ -293,9 +287,13 @@ pub(crate) fn render_first_real_frame(
         surface_format: format!("{:?}", context.surface_config.format),
         viewport_width: context.surface_config.width,
         viewport_height: context.surface_config.height,
-        visible_crop: format!("{VISIBLE_WIDTH}x{VISIBLE_HEIGHT} from {VISIBLE_WIDTH}x{DECODER_ALLOC_HEIGHT} NV12 allocation"),
+        visible_crop: format!(
+            "{VISIBLE_WIDTH}x{VISIBLE_HEIGHT} from {VISIBLE_WIDTH}x{DECODER_ALLOC_HEIGHT} NV12 allocation"
+        ),
         present_ok: true,
-        step_status: "STEP 36 / 40: PASS (API present OK — visual correctness requires human inspection)".to_string(),
+        step_status:
+            "STEP 36 / 40: PASS (API present OK — visual correctness requires human inspection)"
+                .to_string(),
     })
 }
 
@@ -305,17 +303,32 @@ pub fn print_plane_access(info: &PlaneAccessInfo) {
     println!("UV plane format:      {}", info.uv_plane_format);
     println!("Y aspect:             {}", info.y_aspect);
     println!("UV aspect:            {}", info.uv_aspect);
-    println!("Y view created:       {}", if info.y_view_ok { "yes" } else { "no" });
-    println!("UV view created:      {}", if info.uv_view_ok { "yes" } else { "no" });
+    println!(
+        "Y view created:       {}",
+        if info.y_view_ok { "yes" } else { "no" }
+    );
+    println!(
+        "UV view created:      {}",
+        if info.uv_view_ok { "yes" } else { "no" }
+    );
     println!();
     println!("{}", info.step_status);
 }
 
 pub fn print_shader_path(info: &ShaderPathInfo) {
     println!("=== GPU YUV → RGB shader path ===");
-    println!("shader compiled:      {}", if info.shader_compiled { "yes" } else { "no" });
-    println!("bind group accepted:    {}", if info.bind_group_ok { "yes" } else { "no" });
-    println!("pipeline created:     {}", if info.pipeline_ok { "yes" } else { "no" });
+    println!(
+        "shader compiled:      {}",
+        if info.shader_compiled { "yes" } else { "no" }
+    );
+    println!(
+        "bind group accepted:    {}",
+        if info.bind_group_ok { "yes" } else { "no" }
+    );
+    println!(
+        "pipeline created:     {}",
+        if info.pipeline_ok { "yes" } else { "no" }
+    );
     println!("color space:            {}", info.color_space);
     println!("range:                  {}", info.range);
     println!();
@@ -324,14 +337,20 @@ pub fn print_shader_path(info: &ShaderPathInfo) {
 
 pub fn print_render_frame(info: &RenderFrameInfo) {
     println!("=== First real HEVC frame render ===");
-    println!("rendered:               {}", if info.rendered { "yes" } else { "no" });
+    println!(
+        "rendered:               {}",
+        if info.rendered { "yes" } else { "no" }
+    );
     println!("surface format:         {}", info.surface_format);
     println!(
         "viewport:               {} x {}",
         info.viewport_width, info.viewport_height
     );
     println!("visible crop:           {}", info.visible_crop);
-    println!("present:                {}", if info.present_ok { "OK" } else { "FAILED" });
+    println!(
+        "present:                {}",
+        if info.present_ok { "OK" } else { "FAILED" }
+    );
     println!();
     println!("{}", info.step_status);
 }

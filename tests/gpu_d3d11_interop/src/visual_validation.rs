@@ -25,7 +25,7 @@ enum VisualState {
         context: WgpuDx12Context,
         render: RenderPathBundle,
         cached_fence: ID3D12Fence,
-        fence_value: u64,
+        timeline: crate::multi_frame::ContinuousFramebufferTimeline,
     },
     Failed(String),
 }
@@ -84,7 +84,9 @@ impl VisualValidationApp {
         }
         context.surface_config.width = width;
         context.surface_config.height = height;
-        context.surface.configure(&context.device, &context.surface_config);
+        context
+            .surface
+            .configure(&context.device, &context.surface_config);
     }
 
     fn process_one_frame(&mut self) -> Result<(), String> {
@@ -93,7 +95,7 @@ impl VisualValidationApp {
             context,
             render,
             cached_fence,
-            fence_value,
+            timeline,
         } = &mut self.state
         else {
             return Ok(());
@@ -113,7 +115,7 @@ impl VisualValidationApp {
             context,
             render,
             cached_fence,
-            *fence_value,
+            timeline,
             &mut frames_decoded,
             &mut gpu_copies,
             &mut frames_rendered,
@@ -123,10 +125,7 @@ impl VisualValidationApp {
             &mut sync_ms,
             &mut render_ms,
         ) {
-            Ok(()) => {
-                *fence_value += 1;
-                Ok(())
-            }
+            Ok(()) => Ok(()),
             Err(err) if err.contains("EOF") => {
                 crate::restart_fixture_decode(probe)?;
                 crate::multi_frame::process_one_real_frame(
@@ -134,7 +133,7 @@ impl VisualValidationApp {
                     context,
                     render,
                     cached_fence,
-                    *fence_value,
+                    timeline,
                     &mut frames_decoded,
                     &mut gpu_copies,
                     &mut frames_rendered,
@@ -143,18 +142,13 @@ impl VisualValidationApp {
                     &mut copy_ms,
                     &mut sync_ms,
                     &mut render_ms,
-                )?;
-                *fence_value += 1;
-                Ok(())
+                )
             }
             Err(err) => Err(err),
         }
     }
 
-    fn initialize_pipeline(
-        &mut self,
-        event_loop: &ActiveEventLoop,
-    ) -> Result<(), String> {
+    fn initialize_pipeline(&mut self, event_loop: &ActiveEventLoop) -> Result<(), String> {
         let window = Arc::new(
             event_loop
                 .create_window(
@@ -177,12 +171,10 @@ impl VisualValidationApp {
         );
 
         if !wgpu_interop.info.interop_valid {
-            return Err(
-                wgpu_interop
-                    .info
-                    .error
-                    .unwrap_or_else(|| "wgpu interop failed".to_string()),
-            );
+            return Err(wgpu_interop
+                .info
+                .error
+                .unwrap_or_else(|| "wgpu interop failed".to_string()));
         }
 
         let context = wgpu_interop
@@ -207,8 +199,7 @@ impl VisualValidationApp {
             context,
             render,
             cached_fence,
-            // Steps 32/33 used fence value 1; first loop frame uses 2.
-            fence_value: 2,
+            timeline: crate::multi_frame::ContinuousFramebufferTimeline::new(),
         };
 
         Ok(())
