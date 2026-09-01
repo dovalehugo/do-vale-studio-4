@@ -2,9 +2,10 @@
 
 ## Phase 0 — Foundation
 
-- [ ] Repository
-- [ ] Workspace
-- [ ] Architecture
+- [x] Repository
+- [x] Workspace
+- [x] Architecture
+- [x] Integration 0 — acyclic internal dependency wiring (`docs/architecture/GPU_PRODUCTION_INTEGRATION_PLAN.md` §4)
 - [ ] Error model
 - [ ] Logging
 - [ ] Profiling infrastructure
@@ -14,21 +15,27 @@
 
 ## Phase 1 — GPU + Media Foundation
 
-- [ ] FFmpeg integration
-- [ ] Media probing
-- [ ] Hardware decoder detection
-- [ ] VideoFrame abstraction
-- [ ] GPU frame abstraction
-- [ ] Windows D3D11VA
-- [ ] GPU-native frame investigation
-- [ ] GPU texture pipeline
-- [ ] GPU scaling
-- [ ] Native video viewport
+> **Experiment status (2026-09-01):** GPU Experiments 0–2 PASS. The Windows D3D11VA → wgpu DX12 GPU-resident path is validated in `tests/gpu_d3d11_interop`. Production integration is planned in `docs/architecture/GPU_PRODUCTION_INTEGRATION_PLAN.md` — **not yet in `crates/`**.
+
+- [x] GPU capability detection (Experiment 0 — `tests/gpu_probe`)
+- [x] GPU texture pipeline / NV12 shader path (Experiment 1 — `tests/gpu_nv12`)
+- [x] Windows D3D11VA → wgpu interop (Experiment 2 — `tests/gpu_d3d11_interop`)
+- [x] Integration 0 — dependency graph wiring (compile-time only; no production API)
+- [ ] Production crate extraction (Integrations 1–8)
+- [ ] FFmpeg integration (`dvs-decoder`)
+- [ ] Media probing (`dvs-media`)
+- [ ] Hardware decoder detection (production)
+- [ ] VideoFrame / metadata abstraction (`dvs-media`)
+- [ ] GPU frame abstraction (`dvs-gpu`)
+- [ ] GPU scaling (production viewport)
+- [ ] Native video viewport (`dvs-app`)
 
 SUCCESS CRITERION:
 
 4K HEVC hardware decoded and rendered without mandatory
 GPU → CPU → GPU frame conversion.
+
+**Validated in experiment** (commit `a5fdb42`). **Pending** in production application.
 
 ---
 

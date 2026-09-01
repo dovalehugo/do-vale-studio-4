@@ -427,6 +427,15 @@ version = "0.1.0"
 [[package]]
 name = "dvs-app"
 version = "0.1.0"
+dependencies = [
+ "dvs-core",
+ "dvs-decoder",
+ "dvs-gpu",
+ "dvs-media",
+ "dvs-playback",
+ "dvs-render",
+ "dvs-ui",
+]
 
 [[package]]
 name = "dvs-audio"
@@ -443,6 +452,10 @@ version = "0.1.0"
 [[package]]
 name = "dvs-decoder"
 version = "0.1.0"
+dependencies = [
+ "dvs-gpu",
+ "dvs-media",
+]
 
 [[package]]
 name = "dvs-export"
@@ -459,6 +472,11 @@ version = "0.1.0"
 [[package]]
 name = "dvs-playback"
 version = "0.1.0"
+dependencies = [
+ "dvs-decoder",
+ "dvs-media",
+ "dvs-render",
+]
 
 [[package]]
 name = "dvs-project"
@@ -467,10 +485,17 @@ version = "0.1.0"
 [[package]]
 name = "dvs-render"
 version = "0.1.0"
+dependencies = [
+ "dvs-gpu",
+ "dvs-media",
+]
 
 [[package]]
 name = "dvs-ui"
 version = "0.1.0"
+dependencies = [
+ "dvs-core",
+]
 
 [[package]]
 name = "either"

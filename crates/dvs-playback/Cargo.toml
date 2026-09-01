@@ -4,3 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+dvs-media.workspace = true
+dvs-decoder.workspace = true
+dvs-render.workspace = true

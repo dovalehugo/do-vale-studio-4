@@ -1,5 +1,7 @@
 # Do Vale Studio 4 — Architecture
 
+> **GPU path status (2026-09-01):** GPU Experiment 2 PASS — validated in `tests/gpu_d3d11_interop`. **Integration 0** wires acyclic compile-time dependencies only (`docs/architecture/GPU_PRODUCTION_INTEGRATION_PLAN.md`). No production API or runtime path exists yet. `dvs-app` is the composition root and owns validated initialization order.
+
 ## High-Level Architecture
 
 ```text
@@ -117,20 +119,17 @@ media probing
 codec information
 media capabilities
 dvs-decoder
+   Owns FFmpeg integration, D3D11VA sessions, and decode/seek lifecycle.
+   Keeps AVFrame private; constructs `dvs_gpu::D3d11DecodedSurfaceRef` for ingest.
+   Depends on: `dvs-media`, `dvs-gpu`.
+   Must not expose AVFrame, FFmpeg, or COM types above its public boundary.
 
-Hardware/software media decoding.
-
-Responsibilities:
-
-FFmpeg integration
-hardware decoder selection
-decode sessions
-frame production
-seeking
-
-Must expose VideoFrame abstractions.
-
-It must not convert every frame to CPU RGBA by default.
+dvs-gpu
+   Owns wgpu device/queue/surface, adapter identity (LUID), Windows interop bridge,
+   shareable NV12 + fence lifetime, bidirectional timeline fence, imported GPU frames,
+   and `D3d11DecodedSurfaceRef` (Windows ingest type).
+   No internal crate dependencies for the vertical slice.
+   Must not depend on FFmpeg or `dvs-decoder`.
 
 dvs-playback
 
@@ -147,19 +146,10 @@ preroll
 buffering
 presentation timing
 dropped-frame detection
-dvs-gpu
 
-GPU abstraction.
+Depends on: `dvs-decoder`, `dvs-render`, `dvs-media`.
+Must not access COM pointers, wgpu-hal, or fence values.
 
-Responsibilities:
-
-wgpu
-GPU textures
-pipelines
-shaders
-GPU resource management
-synchronization
-texture pools
 dvs-render
 
 Video rendering engine.
@@ -172,6 +162,11 @@ transforms
 scaling
 effects
 color processing
+NV12 plane sampling and YUV→RGB (via `dvs-gpu` frame handles)
+
+Depends on: `dvs-gpu`, `dvs-media`.
+Must not import FFmpeg, perform `CopySubresourceRegion`, or manage fence values.
+
 dvs-audio
 
 Audio engine.
@@ -231,17 +226,37 @@ AI must not directly mutate the core model.
 
 Dependency Rules
 
-Allowed:
+`dvs-app` is the composition root (initialization and wiring).
+
+Internal dependency graph (Integration 0 — wired, acyclic):
 
 dvs-app
-→ dvs-ui
-→ dvs-core
-→ dvs-media
-→ dvs-playback
-→ dvs-render
-→ dvs-gpu
+  → dvs-core, dvs-ui, dvs-media, dvs-gpu, dvs-decoder, dvs-render, dvs-playback
 
-The dependency graph must remain acyclic.
+dvs-playback
+  → dvs-media, dvs-decoder, dvs-render
+
+dvs-decoder
+  → dvs-media, dvs-gpu
+
+dvs-render
+  → dvs-media, dvs-gpu
+
+dvs-ui
+  → dvs-core
+
+dvs-gpu
+  → (no internal crates)
+
+dvs-media
+  → (no internal crates)
+
+Rules:
+
+- The dependency graph must remain acyclic.
+- `dvs-gpu` must not depend on `dvs-decoder`.
+- Windows COM types must not reach `dvs-media`, `dvs-playback`, `dvs-ui`, or `dvs-app`.
+- Integration 0 adds compile-time edges only; no production runtime or external dependencies yet.
 
 Core must remain independent from UI and multimedia implementation.
 
@@ -303,7 +318,16 @@ cache
 AI
 proxies
 
-Exact threading architecture must be validated during implementation.
+Exact threading architecture is specified in `docs/architecture/GPU_PRODUCTION_INTEGRATION_PLAN.md` §8.
+
+First vertical slice (proposed):
+
+UI thread — input, egui, transport commands (no decode, no GPU sync)
+Playback/scheduler thread — clock, frame scheduling, drop policy
+Decoder thread — FFmpeg D3D11VA; builds `dvs_gpu::D3d11DecodedSurfaceRef` for ingest
+GPU/render thread — interop bridge, fence Wait/Signal on wgpu raw queue, render submit
+
+Bounded channels between threads. No tokio on the hot media path.
 
 Memory
 

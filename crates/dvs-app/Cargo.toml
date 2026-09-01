@@ -4,3 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+dvs-core.workspace = true
+dvs-ui.workspace = true
+dvs-media.workspace = true
+dvs-gpu.workspace = true
+dvs-decoder.workspace = true
+dvs-render.workspace = true
+dvs-playback.workspace = true

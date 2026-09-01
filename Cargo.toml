@@ -27,3 +27,10 @@ license = "Proprietary"
 authors = ["Hugo Do Vale"]
 
 [workspace.dependencies]
+dvs-core = { path = "crates/dvs-core" }
+dvs-ui = { path = "crates/dvs-ui" }
+dvs-media = { path = "crates/dvs-media" }
+dvs-gpu = { path = "crates/dvs-gpu" }
+dvs-decoder = { path = "crates/dvs-decoder" }
+dvs-render = { path = "crates/dvs-render" }
+dvs-playback = { path = "crates/dvs-playback" }
