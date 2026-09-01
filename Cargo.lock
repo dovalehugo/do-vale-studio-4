@@ -491,8 +491,13 @@ name = "dvs-playback"
 version = "0.1.0"
 dependencies = [
  "dvs-decoder",
+ "dvs-gpu",
  "dvs-media",
  "dvs-render",
+ "pollster",
+ "thiserror 2.0.20",
+ "wgpu",
+ "winit",
 ]
 
 [[package]]

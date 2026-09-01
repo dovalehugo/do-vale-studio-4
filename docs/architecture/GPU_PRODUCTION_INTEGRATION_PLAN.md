@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-01  
 **Baseline commit:** `a5fdb42b6436c0f23f3960b3cdc6ed94d98e7b5d`  
-**Status:** Integrations 0–2, 3A, 3B, 3C, **4**, and **5** complete. Integration 3 interop bridge is **complete**: shared-resource import and two-cycle bidirectional fence synchronization are **hardware-validated**. Integration 4 provides real FFmpeg D3D11VA decode and production interop bridge wiring. Integration 5 provides production NV12 WGSL sampling/rendering with automated and human visual validation **complete**.
+**Status:** Integrations 0–2, 3A, 3B, 3C, **4**, **5**, and **6** complete. Integration 3 interop bridge is **complete**: shared-resource import and two-cycle bidirectional fence synchronization are **hardware-validated**. Integration 4 provides real FFmpeg D3D11VA decode and production interop bridge wiring. Integration 5 provides production NV12 WGSL sampling/rendering with automated and human visual validation **complete**. Integration 6 provides PTS-driven continuous playback with automated real-time and human motion validation **complete**.
 **Evidence:** GPU Experiments 0–2 PASS (`docs/gpu/GPU_EXPERIMENT_2.md`, `DOVALE_STUDIO_4_HANDOFF_EXPERIMENT_2.md`)
 
 This document transfers the validated experiment pipeline into production crates. It defines proposed APIs, ownership, threading, initialization, unsafe invariants, and staged milestones. **Integration 1** implements platform-independent video metadata in `dvs-media`; GPU, decoder, and playback runtime code are not started.
@@ -687,7 +687,7 @@ Every milestone must compile (`cargo check --workspace`). No milestone modifies 
 | **Files** | `crates/dvs-render/src/{lib,error,color,crop,aspect,fullscreen,output,uniforms,nv12_renderer,surface}.rs`, `crates/dvs-render/shaders/nv12_to_rgb.wgsl`, `crates/dvs-render/tests/windows_nv12_render.rs`, `crates/dvs-render/examples/windows_nv12_visual.rs`, `crates/dvs-gpu/src/nv12_plane_views.rs` |
 | **Dependencies** | `dvs-gpu`, `dvs-media`, `wgpu`, `bytemuck`, `thiserror` |
 | **Acceptance** | Production `Nv12Renderer` samples imported NV12 plane views with metadata-driven YUV→RGB; 90-frame hardware test uses real render passes between `prepare_frame` and `signal_consumed_after_submit`; manual visual example defers `signal_consumed` until exit; SDR path only (unsupported HDR/PQ/HLG rejected); no CPU readback, CPU GPU wait, or software fallback |
-| **Not implemented** | Continuous timed playback (Integration 6), audio, app wiring, full colorimetric certification, HDR display support |
+| **Not implemented** | Audio, app wiring, full colorimetric certification, HDR display support |
 | **Verify** | `cargo test -p dvs-render` + `cargo test -p dvs-render --test windows_nv12_render -- --ignored --nocapture --test-threads=1` + `cargo run -p dvs-render --example windows_nv12_visual --release` (human PASS) |
 | **Untouched** | `dvs-playback`, `dvs-app`, Experiment 2 |
 
@@ -695,11 +695,13 @@ Every milestone must compile (`cargo check --workspace`). No milestone modifies 
 
 | Field | Detail |
 |-------|--------|
-| **Files** | `crates/dvs-playback/src/{lib,engine,clock,metrics,error}.rs` |
-| **Dependencies** | `dvs-decoder`, `dvs-render`, `dvs-media`, `crossbeam-channel` |
-| **Acceptance** | 90-frame sequential run matches experiment throughput order-of-magnitude; metrics exported |
-| **Verify** | `cargo test -p dvs-playback -- --ignored` or dedicated bin |
-| **Untouched** | `dvs-ui` |
+| **Status** | **Complete** — platform-neutral clock/scheduler/metrics; automated real-time hardware validation **PASS** (581 decoded / 581 presented, 0 late drops, FrameId 0–580, media duration ~19.35 s, measured monotonic duration matched media duration, max lateness ~1.95 ms, EOF drain PASS, PTS cadence 30000/1001 ~29.97 fps); human motion validation **PASS** (natural visible speed, no burst playback or long pauses, no green/black frames, no geometry regression/flicker/tearing, correct aspect/orientation, clean EOF, responsive window) |
+| **Files** | `crates/dvs-playback/src/{lib,error,time,clock,scheduler,metrics}.rs`, `crates/dvs-playback/tests/windows_realtime_playback.rs`, `crates/dvs-playback/tests/support/playback_runtime.rs`, `crates/dvs-playback/examples/windows_realtime_playback.rs`, `crates/dvs-gpu/src/windows/interop_bridge.rs` (`discard_prepared_after_submit`) |
+| **Dependencies** | `dvs-media`, `thiserror`; Windows dev-deps: `dvs-decoder`, `dvs-gpu`, `dvs-render`, `winit`, `pollster`, `wgpu` |
+| **Acceptance** | PTS-driven `ControlFlow::WaitUntil` scheduling; late-frame drop before bridge prepare; bounded metrics; one prepared frame max; real render submit before `signal_consumed`; EOF drain; no CPU readback/wait/sleep/busy-loop/software fallback |
+| **Not implemented** | Audio master clock, seek/loop/variable-rate controls, timeline/editor UI, `dvs-app` wiring (Integration 7); not A/V sync, editing readiness, or complete application readiness |
+| **Verify** | `cargo test -p dvs-playback` + `cargo test -p dvs-playback --test windows_realtime_playback -- --ignored --nocapture --test-threads=1` + `cargo run -p dvs-playback --example windows_realtime_playback --release` (human PASS) |
+| **Untouched** | `dvs-app`, `dvs-ui`, Experiment 2 |
 
 ### Integration 7 — `dvs-app` native viewport hookup
 
@@ -747,7 +749,7 @@ Separate milestone after slice stable. Increases throughput; relaxes single-text
 | No CPU pixel transfer | Profiling / code inspection | Confirmed in experiment |
 | Single-texture serialization | Functional correctness | Proven; throughput acceptable on RX 580 |
 
-Production must re-measure after integration; do not assume identical FPS until Integration 6 benchmark.
+Production re-measured in Integration 6: 581/581 presented at ~29.97 fps PTS cadence over ~19.35 s wall time; 0 late drops; no CPU pixel transfer.
 
 ---
 
@@ -777,7 +779,8 @@ Production must re-measure after integration; do not assume identical FPS until 
 | Integration 4B decoder → interop bridge | **Complete** — 90 real frames bridged via `windows_d3d11va_interop`; GPU-only copy; no rendering or CPU readback |
 | Integration 4 overall | **Complete** — decoder session + production interop bridge wiring validated on hardware |
 | Integration 5 NV12 WGSL renderer | **Complete** — automated 90/90 hardware validation PASS; initial human visual FAIL (transformed oversized-triangle geometry); regression correction applied; repeated human visual PASS; SDR-only; no playback timing or audio |
-| Production API | **Partial** (`dvs-media` + `dvs-gpu` + `dvs-decoder` + `dvs-render` complete through Integration 5; playback/app wiring not started) |
-| Production runtime | **Not started** — continuous playback remains Integration 6 |
+| Integration 6 PTS playback scheduler | **Complete** — platform-neutral clock/scheduler/metrics; automated real-time hardware PASS (581/581, 0 late drops, FrameId 0–580, ~19.35 s media duration, max lateness ~1.95 ms, EOF drain PASS, PTS 30000/1001 ~29.97 fps); human motion validation PASS; video-only; no audio/seek/loop/CPU readback/wait/fallback |
+| Production API | **Partial** (`dvs-media` + `dvs-gpu` + `dvs-decoder` + `dvs-render` + `dvs-playback` complete through Integration 6; `dvs-app` wiring not started) |
+| Production runtime | **Partial** — continuous PTS playback validated in `dvs-playback` (automated + human PASS); not wired into `dvs-app` (Integration 7) |
 | CPU fallback | **Not introduced** |
 | Experiment 2 regression crate | **Isolated** (`tests/gpu_d3d11_interop` unchanged) |

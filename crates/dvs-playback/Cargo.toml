@@ -1,9 +1,24 @@
 [package]
 name = "dvs-playback"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
 dvs-media.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(windows)'.dev-dependencies]
 dvs-decoder.workspace = true
+dvs-gpu.workspace = true
 dvs-render.workspace = true
+wgpu.workspace = true
+pollster = "0.4"
+winit = "0.30"
+
+[[test]]
+name = "windows_realtime_playback"
+path = "tests/windows_realtime_playback.rs"
+
+[[example]]
+name = "windows_realtime_playback"
+path = "examples/windows_realtime_playback.rs"

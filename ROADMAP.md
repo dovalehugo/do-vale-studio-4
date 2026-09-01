@@ -30,7 +30,8 @@
 - [x] Integration 4B — real decoded D3D11 surfaces → production interop bridge (`windows_d3d11va_interop` 90-frame hardware PASS; GPU-only copy; no rendering/CPU readback)
 - [x] Integration 4 — complete (4A + 4B)
 - [x] Integration 5 — `dvs-render` NV12 WGSL renderer (**COMPLETE** — automated 90/90 PASS; initial human visual FAIL on transformed oversized-triangle geometry; regression correction applied; repeated human visual PASS; recognizable complete real frame; no diagonal/streak artifacts; SDR-only; no playback/audio)
-- [ ] Production crate extraction (Integrations 6–8)
+- [x] Integration 6 — `dvs-playback` PTS continuous playback (**COMPLETE** — automated real-time hardware PASS 581/581, 0 late drops, ~19.35 s media duration, ~29.97 fps PTS cadence; human motion validation PASS — natural speed, no burst/pauses, no green/black/geometry regression, clean EOF, responsive window; video-only clock; no audio/seek/loop/app wiring)
+- [ ] Production crate extraction (Integrations 7–8)
 - [x] FFmpeg integration (`dvs-decoder`) — decode + interop bridge validated; no playback/app wiring
 - [ ] Media probing (`dvs-media`)
 - [ ] Hardware decoder detection (production)
@@ -44,7 +45,7 @@ SUCCESS CRITERION:
 4K HEVC hardware decoded and rendered without mandatory
 GPU → CPU → GPU frame conversion.
 
-**Validated in experiment** (commit `a5fdb42`). **Production render path validated** through Integration 5 (automated 90/90 + human visual PASS); continuous playback remains Integration 6.
+**Validated in experiment** (commit `a5fdb42`). **Production render path validated** through Integration 5 (automated 90/90 + human visual PASS). **Production PTS playback validated** through Integration 6 (automated 581/581 + human motion PASS); `dvs-app` wiring remains Integration 7.
 
 ---
 

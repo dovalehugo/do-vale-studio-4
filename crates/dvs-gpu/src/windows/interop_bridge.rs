@@ -116,6 +116,19 @@ impl WindowsD3d11WgpuInteropBridge {
         }
     }
 
+    /// Releases a prepared frame without rendering by submitting an empty queue batch
+    /// and signalling `consumed`.
+    ///
+    /// Use when presentation cannot proceed but the bridge slot must be freed in-order.
+    pub fn discard_prepared_after_submit(
+        &mut self,
+        context: &GpuContext,
+        values: FrameFenceValues,
+    ) -> Result<(), GpuError> {
+        context.queue().submit(std::iter::empty());
+        self.signal_consumed_after_submit(context, values)
+    }
+
     /// Signals `consumed` on wgpu's raw queue after the frame's GPU work was submitted.
     ///
     /// Callers must invoke [`GpuContext::queue`].`submit(...)` before this method.
