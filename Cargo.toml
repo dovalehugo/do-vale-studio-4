@@ -34,3 +34,4 @@ dvs-gpu = { path = "crates/dvs-gpu" }
 dvs-decoder = { path = "crates/dvs-decoder" }
 dvs-render = { path = "crates/dvs-render" }
 dvs-playback = { path = "crates/dvs-playback" }
+thiserror = "2.0.20"

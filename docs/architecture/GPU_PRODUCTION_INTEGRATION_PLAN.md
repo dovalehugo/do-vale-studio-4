@@ -2,10 +2,10 @@
 
 **Date:** 2026-09-01  
 **Baseline commit:** `a5fdb42b6436c0f23f3960b3cdc6ed94d98e7b5d`  
-**Status:** Integration 0 complete (dependency wiring + doc corrections) — **no production API or runtime path yet**  
+**Status:** Integration 0 complete (dependency wiring); Integration 1 complete (`dvs-media` metadata contracts) — **no GPU/decoder/playback runtime path yet**
 **Evidence:** GPU Experiments 0–2 PASS (`docs/gpu/GPU_EXPERIMENT_2.md`, `DOVALE_STUDIO_4_HANDOFF_EXPERIMENT_2.md`)
 
-This document transfers the validated experiment pipeline into production crates. It defines proposed APIs, ownership, threading, initialization, unsafe invariants, and staged milestones. **No production Rust code exists yet** for this plan.
+This document transfers the validated experiment pipeline into production crates. It defines proposed APIs, ownership, threading, initialization, unsafe invariants, and staged milestones. **Integration 1** implements platform-independent video metadata in `dvs-media`; GPU, decoder, and playback runtime code are not started.
 
 ---
 
@@ -597,15 +597,16 @@ Every milestone must compile (`cargo check --workspace`). No milestone modifies 
 | **Untouched** | All `src/**` logic (scaffold retained), experiments, external dependencies |
 | **Rollback** | Revert doc/TOML dependency edges only |
 
-### Integration 1 — `dvs-media` metadata contracts
+### Integration 1 — `dvs-media` metadata contracts ✅
 
 | Field | Detail |
 |-------|--------|
-| **Files** | `crates/dvs-media/src/{lib,metadata,pixel_format,color,error}.rs` |
-| **Dependencies** | `thiserror` |
-| **Acceptance** | Unit tests for `VideoDimensions`, `VideoFrameMetadata` |
-| **Verify** | `cargo test -p dvs-media` |
-| **Untouched** | GPU, decoder, experiments |
+| **Files** | `crates/dvs-media/src/{lib,dimensions,pixel_format,color,time,metadata,error}.rs` |
+| **Dependencies** | `thiserror` only |
+| **Public types** | `FrameId`, `Extent2D`, `VisibleRect`, `VideoDimensions`, `VideoPixelFormat`, `VideoColorInfo` (+ `ColorRange`, `ColorMatrix`, `ColorPrimaries`, `TransferCharacteristic`), `TimeBase`, `MediaTimestamp`, `VideoFrameMetadata`, `MetadataError` |
+| **Acceptance** | Unit tests for dimensions, time base, color, metadata, and `Send + Sync` assertions |
+| **Verify** | `cargo test -p dvs-media`; `cargo clippy -p dvs-media -- -D warnings` |
+| **Untouched** | GPU, decoder, playback, experiments |
 
 ### Integration 2 — `dvs-gpu` context, adapter identity, errors
 
@@ -724,7 +725,8 @@ Production must re-measure after integration; do not assume identical FPS until 
 |------|--------|
 | Experiment evidence | **Validated** (GPU Experiment 2 PASS) |
 | Integration 0 dependency wiring | **Complete** (compile-time only) |
-| Production API | **Proposed** (not implemented) |
+| Integration 1 `dvs-media` metadata | **Complete** (`FrameId`, `Extent2D`, `VisibleRect`, `VideoDimensions`, `VideoPixelFormat`, `VideoColorInfo`, `TimeBase`, `MediaTimestamp`, `VideoFrameMetadata`, `MetadataError`) |
+| Production API | **Partial** (`dvs-media` metadata only; GPU/decoder/playback not started) |
 | Production runtime | **Not started** |
 | CPU fallback | **Not introduced** |
 | Experiment 2 regression crate | **Isolated** (`tests/gpu_d3d11_interop` unchanged) |

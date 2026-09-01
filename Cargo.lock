@@ -468,6 +468,9 @@ version = "0.1.0"
 [[package]]
 name = "dvs-media"
 version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.20",
+]
 
 [[package]]
 name = "dvs-playback"
