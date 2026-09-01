@@ -503,8 +503,14 @@ version = "0.1.0"
 name = "dvs-render"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
+ "dvs-decoder",
  "dvs-gpu",
  "dvs-media",
+ "pollster",
+ "thiserror 2.0.20",
+ "wgpu",
+ "winit",
 ]
 
 [[package]]

@@ -5,7 +5,8 @@ use std::sync::Arc;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use wgpu::{
     Adapter, Backends, Device, ExperimentalFeatures, Instance, InstanceDescriptor, Limits, Queue,
-    RequestAdapterOptions, Surface, SurfaceTarget,
+    RequestAdapterOptions, Surface, SurfaceCapabilities, SurfaceConfiguration, SurfaceTarget,
+    TextureUsages,
 };
 
 use crate::adapter::{AdapterIdentity, REQUIRED_DEVICE_FEATURES, validate_required_features};
@@ -119,6 +120,37 @@ impl GpuContext {
     /// Returns the window-backed surface selected during bootstrap.
     pub fn surface(&self) -> &Surface<'static> {
         &self.surface
+    }
+
+    /// Returns surface capabilities for the adapter selected during bootstrap.
+    pub fn surface_capabilities(&self) -> SurfaceCapabilities {
+        self.surface.get_capabilities(&self._adapter)
+    }
+
+    /// Configures the bootstrap surface for presentation at the given pixel size.
+    pub fn configure_surface(
+        &self,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+    ) -> Result<SurfaceConfiguration, GpuError> {
+        if width == 0 || height == 0 {
+            return Err(GpuError::InvalidSurfaceSize);
+        }
+
+        let caps = self.surface_capabilities();
+        let config = SurfaceConfiguration {
+            usage: TextureUsages::RENDER_ATTACHMENT,
+            format,
+            width,
+            height,
+            present_mode: wgpu::PresentMode::Fifo,
+            alpha_mode: caps.alpha_modes[0],
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+        self.surface.configure(&self.device, &config);
+        Ok(config)
     }
 
     /// Returns the surface target kept alive for the surface lifetime.

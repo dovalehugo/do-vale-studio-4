@@ -106,6 +106,16 @@ impl WindowsD3d11WgpuInteropBridge {
         Ok(&self.video_frame)
     }
 
+    /// Returns the imported frame prepared by [`Self::prepare_frame`] while awaiting
+    /// [`Self::signal_consumed_after_submit`].
+    pub fn prepared_frame(&self) -> Result<&GpuVideoFrame, GpuError> {
+        match self.frame_state {
+            BridgeFrameState::AwaitingConsumed(_) => Ok(&self.video_frame),
+            BridgeFrameState::Idle => Err(GpuError::InteropNoPreparedFrame),
+            BridgeFrameState::Poisoned => Err(GpuError::InteropBridgePoisoned),
+        }
+    }
+
     /// Signals `consumed` on wgpu's raw queue after the frame's GPU work was submitted.
     ///
     /// Callers must invoke [`GpuContext::queue`].`submit(...)` before this method.

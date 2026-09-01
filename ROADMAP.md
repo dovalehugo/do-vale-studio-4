@@ -29,13 +29,14 @@
 - [x] Integration 4A — `dvs-decoder` FFmpeg D3D11VA session (hardware ignored test PASS; borrowed D3D11 surfaces via production API; no CPU readback/fallback/copy/bridge/render)
 - [x] Integration 4B — real decoded D3D11 surfaces → production interop bridge (`windows_d3d11va_interop` 90-frame hardware PASS; GPU-only copy; no rendering/CPU readback)
 - [x] Integration 4 — complete (4A + 4B)
-- [ ] Production crate extraction (Integrations 5–8)
+- [x] Integration 5 — `dvs-render` NV12 WGSL renderer (**COMPLETE** — automated 90/90 PASS; initial human visual FAIL on transformed oversized-triangle geometry; regression correction applied; repeated human visual PASS; recognizable complete real frame; no diagonal/streak artifacts; SDR-only; no playback/audio)
+- [ ] Production crate extraction (Integrations 6–8)
 - [x] FFmpeg integration (`dvs-decoder`) — decode + interop bridge validated; no playback/app wiring
 - [ ] Media probing (`dvs-media`)
 - [ ] Hardware decoder detection (production)
 - [x] VideoFrame / metadata abstraction (`dvs-media`)
-- [ ] GPU frame abstraction (`dvs-gpu`) — interop bridge complete; decoder/render integration pending
-- [ ] GPU scaling (production viewport)
+- [x] GPU frame abstraction (`dvs-gpu`) — interop bridge + NV12 plane views complete
+- [x] GPU scaling (production viewport) — Integration 5 renderer implements aspect-fit letterbox
 - [ ] Native video viewport (`dvs-app`)
 
 SUCCESS CRITERION:
@@ -43,7 +44,7 @@ SUCCESS CRITERION:
 4K HEVC hardware decoded and rendered without mandatory
 GPU → CPU → GPU frame conversion.
 
-**Validated in experiment** (commit `a5fdb42`). **Pending** in production application.
+**Validated in experiment** (commit `a5fdb42`). **Production render path validated** through Integration 5 (automated 90/90 + human visual PASS); continuous playback remains Integration 6.
 
 ---
 

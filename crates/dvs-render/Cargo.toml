@@ -1,8 +1,20 @@
 [package]
 name = "dvs-render"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
 dvs-media.workspace = true
 dvs-gpu.workspace = true
+wgpu.workspace = true
+thiserror.workspace = true
+bytemuck = { version = "1.24", features = ["derive"] }
+
+[target.'cfg(windows)'.dev-dependencies]
+dvs-decoder.workspace = true
+pollster = "0.4"
+winit = "0.30"
+
+[[example]]
+name = "windows_nv12_visual"
+path = "examples/windows_nv12_visual.rs"

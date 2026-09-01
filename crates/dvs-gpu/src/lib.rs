@@ -15,6 +15,7 @@ mod fence_timeline;
 mod gpu_video_frame;
 mod luid;
 mod nv12_allocation;
+mod nv12_plane_views;
 #[cfg(target_os = "windows")]
 mod windows;
 
@@ -24,6 +25,7 @@ pub use error::GpuError;
 pub use fence_timeline::{FenceTimeline, FrameFenceValues};
 pub use gpu_video_frame::{GpuVideoFrame, GpuVideoPixelFormat};
 pub use luid::{DxgiAdapterLuid, validate_same_adapter};
+pub use nv12_plane_views::{GpuNv12PlaneViews, create_nv12_plane_views};
 
 #[cfg(target_os = "windows")]
 pub use windows::{

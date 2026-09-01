@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-01  
 **Baseline commit:** `a5fdb42b6436c0f23f3960b3cdc6ed94d98e7b5d`  
-**Status:** Integrations 0–2, 3A, 3B, and **3C** complete. Integration 3 interop bridge is **complete**: shared-resource import and two-cycle bidirectional fence synchronization are **hardware-validated** with a synthetic D3D11 test texture (validation machine is evidence, not a hardcoded requirement). Real FFmpeg decode source remains **Integration 4**; real wgpu NV12 sampling/rendering remains **Integration 5**.
+**Status:** Integrations 0–2, 3A, 3B, 3C, **4**, and **5** complete. Integration 3 interop bridge is **complete**: shared-resource import and two-cycle bidirectional fence synchronization are **hardware-validated**. Integration 4 provides real FFmpeg D3D11VA decode and production interop bridge wiring. Integration 5 provides production NV12 WGSL sampling/rendering with automated and human visual validation **complete**.
 **Evidence:** GPU Experiments 0–2 PASS (`docs/gpu/GPU_EXPERIMENT_2.md`, `DOVALE_STUDIO_4_HANDOFF_EXPERIMENT_2.md`)
 
 This document transfers the validated experiment pipeline into production crates. It defines proposed APIs, ownership, threading, initialization, unsafe invariants, and staged milestones. **Integration 1** implements platform-independent video metadata in `dvs-media`; GPU, decoder, and playback runtime code are not started.
@@ -665,7 +665,7 @@ Every milestone must compile (`cargo check --workspace`). No milestone modifies 
 
 | Field | Detail |
 |-------|--------|
-| **Status** | **Complete** — 3B producer + 3C consumer hardware-validated (synthetic D3D11 test texture); FFmpeg decode wiring (Integration 4) and wgpu render sampling (Integration 5) pending |
+| **Status** | **Complete** — 3B producer + 3C consumer hardware-validated (synthetic D3D11 test texture); FFmpeg decode wiring (Integration 4) and wgpu render sampling (Integration 5) complete |
 
 ### Integration 4 — `dvs-decoder` D3D11VA session extraction
 
@@ -677,18 +677,19 @@ Every milestone must compile (`cargo check --workspace`). No milestone modifies 
 | **Acceptance (4A)** | Opens fixture; validates DXGI LUID against wgpu; `decode_next_d3d11` returns `VideoFrameMetadata` + borrowed `D3d11DecodedSurfaceRef`; no shareable copy, bridge, render, or CPU transfer inside decoder |
 | **Acceptance (4B)** | Real decoded surfaces enter `WindowsD3d11SharedNv12Producer` + `WindowsD3d11WgpuInteropBridge`; GPU-only `CopySubresourceRegion` and `Signal(ready)` enqueued in order on FFmpeg's `device_context` under FFmpeg lock; `Flush` submits asynchronously (does not wait for GPU completion); source slice reuse is ordered by same immediate context before the next `decode_next_d3d11`; existing fence/keyed-mutex protocol; wgpu queue waits for `ready` before accessing the shareable destination; `consumed` protects destination reuse only; empty `queue.submit` exercises completion/release only (no NV12 sampling); `DecoderD3d11Hardware` exposes FFmpeg D3D11 device/context for producer setup |
 | **Verify** | `cargo test -p dvs-decoder` + `cargo test -p dvs-decoder --test windows_d3d11va_decode -- --ignored --nocapture` + `cargo test -p dvs-decoder --test windows_d3d11va_interop -- --ignored --nocapture --test-threads=1` |
-| **5 pending** | NV12 WGSL sampling/render; no production visual validation yet |
 | **Untouched** | `dvs-playback`, `dvs-app`, Experiment 2 |
 
 ### Integration 5 — `dvs-render` NV12 passthrough renderer
 
 | Field | Detail |
 |-------|--------|
-| **Files** | `crates/dvs-render/src/{lib,nv12_passthrough,error}.rs`, `shaders/nv12_to_rgb.wgsl` |
-| **Dependencies** | `dvs-gpu`, `dvs-media`, `wgpu` |
-| **Acceptance** | Renders solid imported test pattern to surface (dev test) |
-| **Verify** | `cargo test -p dvs-render` |
-| **Untouched** | FFmpeg |
+| **Status** | **Complete** — automated hardware validation PASS (90/90); initial human visual validation **FAIL** (oversized clip vertices incorrectly transformed by viewport origin/extent while UV domain remained oversized); regression correction applied (fixed clip-space fullscreen triangle; aspect fit via rectangular viewport/scissor only); repeated human visual validation **PASS** (recognizable complete real frame; no diagonal or horizontal edge streaks; colors and orientation visually plausible; crop/aspect accepted) |
+| **Files** | `crates/dvs-render/src/{lib,error,color,crop,aspect,fullscreen,output,uniforms,nv12_renderer,surface}.rs`, `crates/dvs-render/shaders/nv12_to_rgb.wgsl`, `crates/dvs-render/tests/windows_nv12_render.rs`, `crates/dvs-render/examples/windows_nv12_visual.rs`, `crates/dvs-gpu/src/nv12_plane_views.rs` |
+| **Dependencies** | `dvs-gpu`, `dvs-media`, `wgpu`, `bytemuck`, `thiserror` |
+| **Acceptance** | Production `Nv12Renderer` samples imported NV12 plane views with metadata-driven YUV→RGB; 90-frame hardware test uses real render passes between `prepare_frame` and `signal_consumed_after_submit`; manual visual example defers `signal_consumed` until exit; SDR path only (unsupported HDR/PQ/HLG rejected); no CPU readback, CPU GPU wait, or software fallback |
+| **Not implemented** | Continuous timed playback (Integration 6), audio, app wiring, full colorimetric certification, HDR display support |
+| **Verify** | `cargo test -p dvs-render` + `cargo test -p dvs-render --test windows_nv12_render -- --ignored --nocapture --test-threads=1` + `cargo run -p dvs-render --example windows_nv12_visual --release` (human PASS) |
+| **Untouched** | `dvs-playback`, `dvs-app`, Experiment 2 |
 
 ### Integration 6 — `dvs-playback` continuous single-clip slice
 
@@ -775,7 +776,8 @@ Production must re-measure after integration; do not assume identical FPS until 
 | Integration 4A D3D11VA decoder session | **Complete** — real FFmpeg D3D11VA borrowed surfaces validated via `windows_d3d11va_decode` (hardware evidence; not an RX 580 requirement) |
 | Integration 4B decoder → interop bridge | **Complete** — 90 real frames bridged via `windows_d3d11va_interop`; GPU-only copy; no rendering or CPU readback |
 | Integration 4 overall | **Complete** — decoder session + production interop bridge wiring validated on hardware |
-| Production API | **Partial** (`dvs-media` + `dvs-gpu` + `dvs-decoder` 4A slice; playback/render wiring not started) |
-| Production runtime | **Not started** — Experiment 2 remains runtime evidence |
+| Integration 5 NV12 WGSL renderer | **Complete** — automated 90/90 hardware validation PASS; initial human visual FAIL (transformed oversized-triangle geometry); regression correction applied; repeated human visual PASS; SDR-only; no playback timing or audio |
+| Production API | **Partial** (`dvs-media` + `dvs-gpu` + `dvs-decoder` + `dvs-render` complete through Integration 5; playback/app wiring not started) |
+| Production runtime | **Not started** — continuous playback remains Integration 6 |
 | CPU fallback | **Not introduced** |
 | Experiment 2 regression crate | **Isolated** (`tests/gpu_d3d11_interop` unchanged) |
