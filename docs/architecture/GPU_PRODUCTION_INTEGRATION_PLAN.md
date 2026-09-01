@@ -703,14 +703,17 @@ Every milestone must compile (`cargo check --workspace`). No milestone modifies 
 | **Verify** | `cargo test -p dvs-playback` + `cargo test -p dvs-playback --test windows_realtime_playback -- --ignored --nocapture --test-threads=1` + `cargo run -p dvs-playback --example windows_realtime_playback --release` (human PASS) |
 | **Untouched** | `dvs-app`, `dvs-ui`, Experiment 2 |
 
-### Integration 7 — `dvs-app` native viewport hookup
+### Integration 7 — `dvs-app` production composition root
 
 | Field | Detail |
 |-------|--------|
-| **Files** | `crates/dvs-app/src/{main,runtime,viewport}.rs`, minimal `dvs-ui` transport hooks |
-| **Acceptance** | User opens app, loads fixture, sees continuous video in viewport; ESC exits |
-| **Verify** | Manual + `cargo run -p dvs-app` |
-| **Untouched** | Timeline, project system |
+| **Files** | `crates/dvs-app/src/{main,lib,config,error,state,runtime,metrics_summary,window_app}.rs`, `crates/dvs-app/src/windows/{gpu_surface,video_pipeline}.rs`, `crates/dvs-app/tests/windows_app_smoke.rs` |
+| **Dependencies** | `dvs-decoder`, `dvs-gpu`, `dvs-render`, `dvs-playback`, `dvs-media`, `thiserror`; Windows: `winit`, `pollster`, `wgpu` |
+| **Acceptance** | Real executable `cargo run -p dvs-app --release -- --input <video-path>`; GPU before decoder; first-frame preview; SPACE starts PTS playback once; ESC/close clean shutdown with bridge discard; no test/example imports; no CPU readback/fallback |
+| **Status** | **COMPLETE** — production composition; human validation PASS (playback, EOF, post-EOF resize, clean shutdown); Rust struct field-drop audit PASS; automated smoke test with post-EOF resize PASS |
+| **Verify** | `cargo test -p dvs-app` + `cargo test -p dvs-app --test windows_app_smoke -- --ignored --nocapture --test-threads=1` + manual `cargo run -p dvs-app --release -- --input docs/fixtures/test_4k_hevc_8bit30.mp4` |
+| **Not implemented** | Editor UI, timeline, audio, seek/loop, file picker, Integration 8+ |
+| **Untouched** | `dvs-ui`, Experiment 2, Integration 5/6 examples (remain validation utilities) |
 
 ### Integration 8 — Experiment 2 regression via production APIs
 
@@ -780,7 +783,7 @@ Production re-measured in Integration 6: 581/581 presented at ~29.97 fps PTS cad
 | Integration 4 overall | **Complete** — decoder session + production interop bridge wiring validated on hardware |
 | Integration 5 NV12 WGSL renderer | **Complete** — automated 90/90 hardware validation PASS; initial human visual FAIL (transformed oversized-triangle geometry); regression correction applied; repeated human visual PASS; SDR-only; no playback timing or audio |
 | Integration 6 PTS playback scheduler | **Complete** — platform-neutral clock/scheduler/metrics; automated real-time hardware PASS (581/581, 0 late drops, FrameId 0–580, ~19.35 s media duration, max lateness ~1.95 ms, EOF drain PASS, PTS 30000/1001 ~29.97 fps); human motion validation PASS; video-only; no audio/seek/loop/CPU readback/wait/fallback |
-| Production API | **Partial** (`dvs-media` + `dvs-gpu` + `dvs-decoder` + `dvs-render` + `dvs-playback` complete through Integration 6; `dvs-app` wiring not started) |
-| Production runtime | **Partial** — continuous PTS playback validated in `dvs-playback` (automated + human PASS); not wired into `dvs-app` (Integration 7) |
+| Production API | **Partial** (`dvs-media` + `dvs-gpu` + `dvs-decoder` + `dvs-render` + `dvs-playback` complete through Integration 6; `dvs-app` composition root complete — Integration 7) |
+| Production runtime | **Partial** — continuous PTS playback validated in `dvs-playback`; production `dvs-app` executable wired and human-validated (Integration 7 COMPLETE) |
 | CPU fallback | **Not introduced** |
 | Experiment 2 regression crate | **Isolated** (`tests/gpu_d3d11_interop` unchanged) |

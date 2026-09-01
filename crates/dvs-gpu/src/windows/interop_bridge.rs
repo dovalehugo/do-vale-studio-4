@@ -23,8 +23,13 @@ enum BridgeFrameState {
 
 /// Owns the D3D11 producer, imported D3D12 resources, and wgpu NV12 texture.
 ///
-/// Field order is deliberate: `producer` is dropped last so NT shared handles remain
-/// valid for the lifetime of the opened D3D12 objects and wgpu texture wrapper.
+/// # Drop order
+///
+/// Rust drops struct fields in declaration order. `producer` is declared first and is
+/// therefore destroyed before `video_frame`. This is safe because `import_shared_nv12_from_producer`
+/// opens the NT handles once and the imported wgpu `Texture` retains its own D3D12
+/// allocation; closing the producer-side D3D11 resources does not invalidate the
+/// already-imported consumer texture or `cached_fence`.
 pub struct WindowsD3d11WgpuInteropBridge {
     producer: WindowsD3d11SharedNv12Producer,
     cached_fence: ID3D12Fence,
@@ -112,6 +117,19 @@ impl WindowsD3d11WgpuInteropBridge {
         match self.frame_state {
             BridgeFrameState::AwaitingConsumed(_) => Ok(&self.video_frame),
             BridgeFrameState::Idle => Err(GpuError::InteropNoPreparedFrame),
+            BridgeFrameState::Poisoned => Err(GpuError::InteropBridgePoisoned),
+        }
+    }
+
+    /// Returns the imported NV12 texture for read-only display after the bridge slot
+    /// was consumed and no further [`Self::prepare_frame`] calls will occur.
+    ///
+    /// The producer will not overwrite this texture until the next prepare. Callers must
+    /// ensure decoding has ended before relying on this for repeated redraws.
+    pub fn consumed_display_frame(&self) -> Result<&GpuVideoFrame, GpuError> {
+        match self.frame_state {
+            BridgeFrameState::Idle => Ok(&self.video_frame),
+            BridgeFrameState::AwaitingConsumed(_) => Err(GpuError::InteropFrameAlreadyPrepared),
             BridgeFrameState::Poisoned => Err(GpuError::InteropBridgePoisoned),
         }
     }

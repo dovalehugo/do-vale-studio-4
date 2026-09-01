@@ -38,14 +38,14 @@
 - [x] VideoFrame / metadata abstraction (`dvs-media`)
 - [x] GPU frame abstraction (`dvs-gpu`) — interop bridge + NV12 plane views complete
 - [x] GPU scaling (production viewport) — Integration 5 renderer implements aspect-fit letterbox
-- [ ] Native video viewport (`dvs-app`)
+- [x] Native video viewport (`dvs-app`) — **Integration 7 COMPLETE** (production composition; human validation PASS; drop-order audit PASS)
 
 SUCCESS CRITERION:
 
 4K HEVC hardware decoded and rendered without mandatory
 GPU → CPU → GPU frame conversion.
 
-**Validated in experiment** (commit `a5fdb42`). **Production render path validated** through Integration 5 (automated 90/90 + human visual PASS). **Production PTS playback validated** through Integration 6 (automated 581/581 + human motion PASS); `dvs-app` wiring remains Integration 7.
+**Validated in experiment** (commit `a5fdb42`). **Production render path validated** through Integration 5. **Production PTS playback validated** through Integration 6. **Production `dvs-app` composition root** (Integration 7 COMPLETE — human validation PASS; Rust declaration-order drop audit PASS).
 
 ---
 

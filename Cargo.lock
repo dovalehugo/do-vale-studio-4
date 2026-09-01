@@ -428,13 +428,15 @@ version = "0.1.0"
 name = "dvs-app"
 version = "0.1.0"
 dependencies = [
- "dvs-core",
  "dvs-decoder",
  "dvs-gpu",
  "dvs-media",
  "dvs-playback",
  "dvs-render",
- "dvs-ui",
+ "pollster",
+ "thiserror 2.0.20",
+ "wgpu",
+ "winit",
 ]
 
 [[package]]
