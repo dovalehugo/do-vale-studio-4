@@ -11,6 +11,20 @@ mod shutdown;
 mod state;
 
 #[cfg(target_os = "windows")]
+mod egui_shell;
+#[cfg(target_os = "windows")]
+mod event_loop_schedule;
+#[cfg(target_os = "windows")]
+mod loop_metrics;
+#[cfg(target_os = "windows")]
+mod monitor_rect;
+#[cfg(target_os = "windows")]
+mod repaint;
+#[cfg(target_os = "windows")]
+mod resize_diagnostic;
+#[cfg(target_os = "windows")]
+mod view_model;
+#[cfg(target_os = "windows")]
 mod window_app;
 #[cfg(target_os = "windows")]
 mod windows;

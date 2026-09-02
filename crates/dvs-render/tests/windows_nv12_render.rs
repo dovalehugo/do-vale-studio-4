@@ -386,11 +386,11 @@ fn windows_nv12_render_fixture() {
     assert_eq!(rendered_count, FRAMES_TO_RENDER);
     assert_eq!(final_values.frame_index(), FRAMES_TO_RENDER as u64);
     assert_eq!(previous_frame_id, Some(FRAMES_TO_RENDER as u64 - 1));
-    assert_eq!(final_stats.shader_modules, 1);
+    assert_eq!(final_stats.shader_modules, 2);
     assert_eq!(final_stats.render_pipelines, 1);
     assert_eq!(final_stats.samplers, 1);
-    assert_eq!(final_stats.bind_group_layouts, 1);
-    assert_eq!(final_stats.uniform_buffers, 1);
-    assert_eq!(final_stats.bind_groups, 1);
+    assert_eq!(final_stats.bind_group_layouts, 2);
+    assert_eq!(final_stats.uniform_buffers, 2);
+    assert_eq!(final_stats.bind_groups, 2);
     assert_eq!(bridge.shared_handle_open_counts(), (1, 1));
 }

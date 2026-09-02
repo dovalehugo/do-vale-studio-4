@@ -8,11 +8,12 @@ const HELP: &str = "\
 Do Vale Studio 4 — production video application
 
 Usage:
-  dvs-app --input <video-path>
+  dvs-app --input <video-path> [--diagnose-resize]
 
 Options:
-  --input <path>  Required input video file
-  --help          Show this help message
+  --input <path>       Required input video file
+  --diagnose-resize    Write interactive resize trace to target/dvs-resize-diagnostic.log
+  --help               Show this help message
 ";
 
 /// How the application should behave after startup.
@@ -32,6 +33,7 @@ pub enum RunMode {
 pub struct AppConfig {
     input: PathBuf,
     run_mode: RunMode,
+    diagnose_resize: bool,
 }
 
 /// Returns whether the event loop may be created off the main thread.
@@ -78,12 +80,21 @@ impl AppConfig {
     fn new(input: impl Into<PathBuf>, run_mode: RunMode) -> Result<Self, AppError> {
         let input = input.into();
         validate_input_path(&input)?;
-        Ok(Self { input, run_mode })
+        Ok(Self {
+            input,
+            run_mode,
+            diagnose_resize: false,
+        })
     }
 
     /// Returns the validated input video path.
     pub fn input(&self) -> &Path {
         &self.input
+    }
+
+    /// Returns whether interactive resize diagnostics are enabled.
+    pub const fn diagnose_resize(&self) -> bool {
+        self.diagnose_resize
     }
 
     /// Returns the configured run mode.
@@ -112,11 +123,15 @@ where
     let _program = iter.next();
 
     let mut input = None;
+    let mut diagnose_resize = false;
     while let Some(arg) = iter.next() {
         let arg = arg.as_ref();
         match arg {
             "--help" | "-h" => {
                 return Err(AppError::Config(HELP.to_string()));
+            }
+            "--diagnose-resize" => {
+                diagnose_resize = true;
             }
             "--input" => {
                 let value = iter
@@ -141,7 +156,9 @@ where
     let input = input.ok_or_else(|| {
         AppError::Config("missing required argument: --input <video-path>".to_string())
     })?;
-    AppConfig::interactive(input)
+    let mut config = AppConfig::interactive(input)?;
+    config.diagnose_resize = diagnose_resize;
+    Ok(config)
 }
 
 fn validate_input_path(path: &Path) -> Result<(), AppError> {
@@ -248,6 +265,21 @@ mod tests {
         fs::write(&path, b"test").expect("write temp");
         let config = AppConfig::smoke_test_with_post_eof_resize(&path).expect("smoke");
         assert!(config.smoke_post_eof_resize());
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn diagnose_resize_flag_is_parsed() {
+        let path = temp_file("diag");
+        fs::write(&path, b"test").expect("write temp");
+        let config = parse_args([
+            "dvs-app",
+            "--input",
+            path.to_str().expect("utf8"),
+            "--diagnose-resize",
+        ])
+        .expect("parse");
+        assert!(config.diagnose_resize());
         let _ = fs::remove_file(path);
     }
 

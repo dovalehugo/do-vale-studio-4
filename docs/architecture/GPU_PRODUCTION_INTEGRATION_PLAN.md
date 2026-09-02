@@ -719,10 +719,16 @@ Every milestone must compile (`cargo check --workspace`). No milestone modifies 
 
 | Field | Detail |
 |-------|--------|
-| **Files** | `tests/gpu_d3d11_interop` refactored to call `dvs-gpu`/`dvs-decoder`/`dvs-render` OR parallel `tests/gpu_production_regression` |
-| **Acceptance** | Same PASS criteria as Experiment 2; `--visual-diagnostic` keys preserved |
-| **Verify** | `cargo run -p gpu-d3d11-interop -- --visual` + release benchmark |
-| **Rollback** | Keep experiment self-contained if refactor risks regression |
+| **Status** | **Incomplete** — Integration **8A PARTIAL / BLOCKED** (human FAIL: interactive resize permanently stops playback); explicit `EventLoopSchedule` wake state machine redesign; Integration **8B** NOT STARTED |
+| **8A files** | `crates/dvs-ui/**`, `crates/dvs-app/**` (egui integration), `crates/dvs-render/src/physical_rect.rs`, `crates/dvs-render/shaders/solid_color.wgsl`, `crates/dvs-render/src/nv12_renderer.rs` (`encode_frame_in_rect`) |
+| **8A acceptance** | Single wgpu device/queue/surface; egui 0.33.3 + winit 0.30 + wgpu 27.0.1; real NV12 video in Program Monitor destination rect; Play/SPACE start playback once; PTS playback inside editor shell; active-playback resize with playback resume; post-EOF resize redraw; final frame retained; no CPU readback/fallback |
+| **8A verify** | `cargo test -p dvs-ui` + `cargo test -p dvs-app` + synthetic smoke (`request_inner_size` resize only; **not sufficient** for native interactive Windows resize) + manual functional validation + `--diagnose-resize` trace for interactive resize failures |
+| **8A status** | **PARTIAL / BLOCKED** — automated smoke provides synthetic/programmatic resize coverage only (insufficient for final acceptance); human FAIL (interactive resize while Playing permanently stops playback); use `--diagnose-resize` to capture real failure trace before any further scheduler changes |
+| **8B pending** | Media Pool functionality, multipista timeline, Inspector functionality, deeper professional layout refinement |
+| **Deferred (8)** | High-fidelity visual design; audio; seeking; effects; project persistence; functional timeline editing |
+| **Regression (8)** | `tests/gpu_d3d11_interop` refactored to call production APIs OR parallel `tests/gpu_production_regression` |
+| **Verify (8)** | `cargo run -p gpu-d3d11-interop -- --visual` + release benchmark |
+| **Rollback (8)** | Keep experiment self-contained if refactor risks regression |
 
 ### Future — Multi-buffered shared textures
 
@@ -784,6 +790,6 @@ Production re-measured in Integration 6: 581/581 presented at ~29.97 fps PTS cad
 | Integration 5 NV12 WGSL renderer | **Complete** — automated 90/90 hardware validation PASS; initial human visual FAIL (transformed oversized-triangle geometry); regression correction applied; repeated human visual PASS; SDR-only; no playback timing or audio |
 | Integration 6 PTS playback scheduler | **Complete** — platform-neutral clock/scheduler/metrics; automated real-time hardware PASS (581/581, 0 late drops, FrameId 0–580, ~19.35 s media duration, max lateness ~1.95 ms, EOF drain PASS, PTS 30000/1001 ~29.97 fps); human motion validation PASS; video-only; no audio/seek/loop/CPU readback/wait/fallback |
 | Production API | **Partial** (`dvs-media` + `dvs-gpu` + `dvs-decoder` + `dvs-render` + `dvs-playback` complete through Integration 6; `dvs-app` composition root complete — Integration 7) |
-| Production runtime | **Partial** — continuous PTS playback validated in `dvs-playback`; production `dvs-app` executable wired and human-validated (Integration 7 COMPLETE) |
+| Production runtime | **Partial** — continuous PTS playback validated in `dvs-playback`; production `dvs-app` executable wired (Integration 7 COMPLETE); functional editor shell with Program Monitor composition (Integration 8A **PARTIAL / BLOCKED** — human FAIL on interactive resize); Integration 8 overall incomplete (8B NOT STARTED) |
 | CPU fallback | **Not introduced** |
 | Experiment 2 regression crate | **Isolated** (`tests/gpu_d3d11_interop` unchanged) |

@@ -6,7 +6,6 @@ use std::rc::Rc;
 use dvs_gpu::{D3d11DecodedSurfaceRef, DxgiAdapterLuid};
 use dvs_media::VideoFrameMetadata;
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11DeviceContext};
-use windows::core::Interface;
 
 use crate::error::DecoderError;
 use crate::ffmpeg::{
@@ -168,6 +167,7 @@ impl DecoderSession {
         context: &ID3D11DeviceContext,
     ) -> Result<(), DecoderError> {
         use crate::ffmpeg::ffmpeg_d3d11_device_context_ptr;
+        use windows::core::Interface;
 
         let ffmpeg_ptr = ffmpeg_d3d11_device_context_ptr(&self.hw_device)?;
         let session_ptr = context.as_raw();
@@ -176,6 +176,15 @@ impl DecoderSession {
                 detail: "device_context COM identity mismatch",
             });
         }
+        Ok(())
+    }
+
+    /// Release builds skip the FFmpeg context identity check.
+    #[cfg(not(debug_assertions))]
+    pub fn debug_assert_same_ffmpeg_device_context(
+        &self,
+        _context: &ID3D11DeviceContext,
+    ) -> Result<(), DecoderError> {
         Ok(())
     }
 

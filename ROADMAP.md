@@ -39,13 +39,15 @@
 - [x] GPU frame abstraction (`dvs-gpu`) — interop bridge + NV12 plane views complete
 - [x] GPU scaling (production viewport) — Integration 5 renderer implements aspect-fit letterbox
 - [x] Native video viewport (`dvs-app`) — **Integration 7 COMPLETE** (production composition; human validation PASS; drop-order audit PASS)
+- [x] Editor shell + Program Monitor (`dvs-ui` / `dvs-app`) — **Integration 8A PARTIAL / BLOCKED** (automated smoke provides synthetic/programmatic resize coverage only — insufficient for final acceptance; human FAIL — interactive resize while Playing permanently stops playback; `--diagnose-resize` trace required before any further scheduler changes; 8B NOT STARTED)
+- [ ] Integration 8B — functional editor interactions (Media Pool, multipista timeline, Inspector; **NOT STARTED**)
 
 SUCCESS CRITERION:
 
 4K HEVC hardware decoded and rendered without mandatory
 GPU → CPU → GPU frame conversion.
 
-**Validated in experiment** (commit `a5fdb42`). **Production render path validated** through Integration 5. **Production PTS playback validated** through Integration 6. **Production `dvs-app` composition root** (Integration 7 COMPLETE — human validation PASS; Rust declaration-order drop audit PASS).
+**Validated in experiment** (commit `a5fdb42`). **Production render path validated** through Integration 5. **Production PTS playback validated** through Integration 6. **Production `dvs-app` composition root** (Integration 7 COMPLETE). **Production editor shell** (Integration 8A **PARTIAL / BLOCKED** — human FAIL on interactive resize permanently stopping playback; `--diagnose-resize` trace required; 8B NOT STARTED).
 
 ---
 

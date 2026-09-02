@@ -14,10 +14,13 @@ mod error;
 mod fullscreen;
 mod nv12_renderer;
 mod output;
+mod physical_rect;
 mod surface;
 mod uniforms;
 
-pub use aspect::{AspectFitNdc, AspectFitRect, aspect_fit_rect, aspect_fit_to_ndc};
+pub use aspect::{
+    AspectFitNdc, AspectFitRect, aspect_fit_rect, aspect_fit_rect_in_destination, aspect_fit_to_ndc,
+};
 pub use color::{
     MatrixPrimaries, YuvToRgbCoefficients, YuvToRgbRow, coefficients_from_color_info,
     coefficients_from_primaries, limited_yuv_to_rgb, matrix_primaries,
@@ -29,6 +32,7 @@ pub use fullscreen::{
 };
 pub use nv12_renderer::{Nv12Renderer, Nv12RendererConfig, Nv12RendererResourceStats};
 pub use output::{OutputEncoding, select_surface_format};
+pub use physical_rect::{PhysicalRenderRect, clamp_physical_rect};
 pub use surface::RenderSurface;
 pub use uniforms::Nv12RenderUniforms;
 

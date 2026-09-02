@@ -14,17 +14,27 @@ use dvs_playback::{
     ScheduleDecision, SchedulerConfig, media_duration_between,
 };
 use dvs_render::{
-    AspectFitRect, Nv12Renderer, Nv12RendererConfig, Nv12RendererResourceStats, RenderSurface,
-    aspect_fit_rect,
+    AspectFitRect, Nv12Renderer, Nv12RendererConfig, Nv12RendererResourceStats, PhysicalRenderRect,
+    RenderSurface,
 };
+use wgpu::{CommandEncoder, LoadOp, TextureView};
 use winit::dpi::PhysicalSize;
 
 use crate::error::AppError;
 
-struct PreparedFrame {
+pub(crate) struct PreparedFrame {
     metadata: VideoFrameMetadata,
     values: FrameFenceValues,
     schedule_plan: FrameSchedulePlan,
+}
+
+/// Playback step evaluated without acquiring the presentation surface.
+pub enum PlaybackStep {
+    Idle,
+    Waiting,
+    Present { lateness: MediaTimeUs },
+    Finished,
+    Fatal(AppError),
 }
 
 /// Production video pipeline owned by the application composition root.
@@ -54,16 +64,19 @@ pub struct VideoPipeline {
     time_base_summary: Option<String>,
     playback_started: bool,
     decode_calls_after_eof: u64,
+    diagnostic_notes: Vec<PipelineDiagnosticNote>,
 }
 
-/// Result of one playback tick.
-pub enum TickResult {
-    Idle,
-    Waiting,
-    Presented,
-    Finished,
-    SurfaceRetry(AppError),
-    Fatal(AppError),
+#[derive(Clone)]
+pub(crate) struct PipelineDiagnosticNote {
+    pub kind: String,
+    pub extra: String,
+}
+
+enum DecodePrepareResult {
+    Prepared,
+    Eof,
+    Failed(AppError),
 }
 
 impl VideoPipeline {
@@ -138,6 +151,7 @@ impl VideoPipeline {
             time_base_summary: Some(time_base_summary),
             playback_started: false,
             decode_calls_after_eof: 0,
+            diagnostic_notes: Vec::new(),
         };
 
         pipeline.metrics.record_decoded();
@@ -166,6 +180,7 @@ impl VideoPipeline {
     pub const fn held_display_metadata(&self) -> Option<&VideoFrameMetadata> {
         self.held_display_metadata.as_ref()
     }
+
     pub const fn has_prepared_frame(&self) -> bool {
         self.prepared.is_some()
     }
@@ -228,64 +243,170 @@ impl VideoPipeline {
         Ok(())
     }
 
-    /// Renders the current display frame without changing playback state.
-    ///
-    /// Uses the prepared bridge frame in `Ready`, or the held last-presented frame in
-    /// `Ended` after the bridge slot was consumed.
-    pub fn render_current_display_frame(
+    /// Encodes the current display frame into a destination rectangle on a shared encoder.
+    pub fn encode_display_in_rect(
         &mut self,
         gpu: &GpuContext,
-        surface: &RenderSurface,
+        encoder: &mut CommandEncoder,
+        target: &TextureView,
+        target_width: u32,
+        target_height: u32,
+        destination: PhysicalRenderRect,
     ) -> Result<AspectFitRect, AppError> {
-        if surface.configuration().width == 0 || surface.configuration().height == 0 {
-            return Err(AppError::Render(
-                dvs_render::RenderError::InvalidTargetDimensions,
-            ));
-        }
-
         let (metadata, video) = if let Some(prepared) = self.prepared.as_ref() {
-            (prepared.metadata, self.bridge.prepared_frame()?)
+            (
+                prepared.metadata,
+                self.bridge.prepared_frame().map_err(AppError::Gpu)?,
+            )
         } else if self.eof {
             let metadata = *self
                 .held_display_metadata
                 .as_ref()
                 .ok_or(AppError::InvalidState)?;
-            (metadata, self.bridge.consumed_display_frame()?)
+            (
+                metadata,
+                self.bridge
+                    .consumed_display_frame()
+                    .map_err(AppError::Gpu)?,
+            )
         } else {
             return Err(AppError::InvalidState);
         };
 
-        let visible = metadata.dimensions().visible();
-        let config = surface.configuration();
-        let fit = aspect_fit_rect(
-            visible.width(),
-            visible.height(),
-            config.width,
-            config.height,
-        )?;
-
-        let (surface_texture, target_view) = surface.acquire_frame(gpu)?;
-        let mut encoder = gpu
-            .device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("dvs-app-display"),
-            });
-        self.renderer.encode_frame(
-            gpu.device(),
-            gpu.queue(),
-            &mut encoder,
-            video,
-            metadata,
-            &target_view,
-            config.width,
-            config.height,
-        )?;
-        gpu.queue().submit(Some(encoder.finish()));
-        surface_texture.present();
-        Ok(fit)
+        self.renderer
+            .encode_frame_in_rect(
+                gpu.device(),
+                gpu.queue(),
+                encoder,
+                video,
+                metadata,
+                target,
+                target_width,
+                target_height,
+                destination,
+                LoadOp::Load,
+            )
+            .map_err(AppError::Render)
     }
 
-    pub fn next_wait_deadline(&mut self) -> Option<Instant> {
+    /// Encodes the prepared playback frame into a destination rectangle on a shared encoder.
+    #[allow(clippy::too_many_arguments)]
+    pub fn encode_prepared_in_rect(
+        &mut self,
+        gpu: &GpuContext,
+        encoder: &mut CommandEncoder,
+        target: &TextureView,
+        target_width: u32,
+        target_height: u32,
+        destination: PhysicalRenderRect,
+        prepared: &PreparedFrame,
+    ) -> Result<AspectFitRect, AppError> {
+        let video = self.bridge.prepared_frame().map_err(AppError::Gpu)?;
+        self.renderer
+            .encode_frame_in_rect(
+                gpu.device(),
+                gpu.queue(),
+                encoder,
+                video,
+                prepared.metadata,
+                target,
+                target_width,
+                target_height,
+                destination,
+                LoadOp::Load,
+            )
+            .map_err(AppError::Render)
+    }
+
+    /// Finalizes a presented frame after queue submission.
+    pub fn finalize_present(
+        &mut self,
+        gpu: &GpuContext,
+        prepared: PreparedFrame,
+        lateness: MediaTimeUs,
+    ) -> Result<(), AppError> {
+        self.bridge
+            .signal_consumed_after_submit(gpu, prepared.values)
+            .map_err(AppError::Gpu)?;
+        self.timeline.advance().map_err(AppError::Gpu)?;
+        self.metrics
+            .record_presented(prepared.metadata.frame_id(), lateness);
+        self.held_display_metadata = Some(prepared.metadata);
+        if let Some(ts) = prepared.metadata.timestamp() {
+            self.last_pts = Some(ts);
+        }
+        Ok(())
+    }
+
+    /// Returns whether a prepared frame is waiting for its PTS target.
+    pub fn is_waiting_for_prepared_present(&self) -> bool {
+        let Some(prepared) = self.prepared.as_ref() else {
+            return false;
+        };
+        let Some(elapsed) = self.clock.elapsed_host_us() else {
+            return false;
+        };
+        matches!(
+            self.scheduler
+                .evaluate_plan(elapsed, prepared.schedule_plan),
+            ScheduleDecision::WaitUntil { .. }
+        )
+    }
+
+    /// Evaluates the next playback step without rendering.
+    pub fn evaluate_playback_step(
+        &mut self,
+        gpu: &GpuContext,
+        window_size: PhysicalSize<u32>,
+    ) -> PlaybackStep {
+        if !self.playback_started {
+            return PlaybackStep::Idle;
+        }
+        if window_size.width == 0 || window_size.height == 0 {
+            return PlaybackStep::Waiting;
+        }
+
+        if let Some(prepared) = self.prepared.as_ref() {
+            let elapsed = match self.clock.elapsed_host_us() {
+                Some(value) => value,
+                None => return PlaybackStep::Waiting,
+            };
+            match self
+                .scheduler
+                .evaluate_plan(elapsed, prepared.schedule_plan)
+            {
+                ScheduleDecision::WaitUntil { .. } => {
+                    self.metrics.record_early_wait();
+                    PlaybackStep::Waiting
+                }
+                ScheduleDecision::PresentNow { lateness } => PlaybackStep::Present { lateness },
+                ScheduleDecision::DropLate { .. } | ScheduleDecision::RejectTimestamp(_) => {
+                    PlaybackStep::Waiting
+                }
+            }
+        } else if self.eof {
+            PlaybackStep::Finished
+        } else {
+            match self.decode_prepare_next(gpu) {
+                DecodePrepareResult::Prepared => PlaybackStep::Waiting,
+                DecodePrepareResult::Eof => PlaybackStep::Finished,
+                DecodePrepareResult::Failed(error) => PlaybackStep::Fatal(error),
+            }
+        }
+    }
+
+    /// Takes the currently prepared frame for presentation.
+    pub(crate) fn take_prepared_for_present(&mut self) -> Option<PreparedFrame> {
+        self.prepared.take()
+    }
+
+    /// Restores a prepared frame when surface acquisition fails.
+    pub(crate) fn restore_prepared(&mut self, prepared: PreparedFrame) {
+        self.prepared = Some(prepared);
+    }
+
+    /// Returns the monotonic instant when the prepared frame becomes due, if waiting.
+    pub fn playback_wakeup_deadline(&self) -> Option<Instant> {
         if !self.playback_started {
             return None;
         }
@@ -302,183 +423,11 @@ impl VideoPipeline {
         }
     }
 
-    pub fn tick(
-        &mut self,
-        gpu: &GpuContext,
-        surface: &RenderSurface,
-        window_size: PhysicalSize<u32>,
-    ) -> TickResult {
-        if !self.playback_started {
-            return TickResult::Idle;
-        }
-
-        if window_size.width == 0 || window_size.height == 0 {
-            return TickResult::Waiting;
-        }
-
-        if let Some(prepared) = self.prepared.as_ref() {
-            let elapsed = match self.clock.elapsed_host_us() {
-                Some(value) => value,
-                None => return TickResult::Waiting,
-            };
-            match self
-                .scheduler
-                .evaluate_plan(elapsed, prepared.schedule_plan)
-            {
-                ScheduleDecision::WaitUntil { .. } => {
-                    self.metrics.record_early_wait();
-                    return TickResult::Waiting;
-                }
-                ScheduleDecision::PresentNow { lateness } => {
-                    return self.present_prepared(gpu, surface, lateness);
-                }
-                ScheduleDecision::DropLate { .. } | ScheduleDecision::RejectTimestamp(_) => {
-                    return TickResult::Fatal(AppError::Fatal(
-                        "prepared frame became undeliverable".to_string(),
-                    ));
-                }
-            }
-        }
-
-        if self.eof {
-            return TickResult::Finished;
-        }
-
-        self.decode_prepare_next(gpu)
-    }
-
-    fn present_prepared(
-        &mut self,
-        gpu: &GpuContext,
-        surface: &RenderSurface,
-        lateness: MediaTimeUs,
-    ) -> TickResult {
-        let prepared = match self.prepared.take() {
-            Some(value) => value,
-            None => return TickResult::Waiting,
-        };
-
-        let video = match self.bridge.prepared_frame() {
-            Ok(frame) => frame,
-            Err(error) => return TickResult::Fatal(AppError::Gpu(error)),
-        };
-
-        let (surface_texture, target_view) = match surface.acquire_frame(gpu) {
-            Ok(value) => value,
-            Err(error) => {
-                self.prepared = Some(prepared);
-                return TickResult::SurfaceRetry(AppError::Render(error));
-            }
-        };
-
-        let config = surface.configuration();
-        let mut encoder = gpu
-            .device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("dvs-app-realtime"),
-            });
-
-        if let Err(error) = self.renderer.encode_frame(
-            gpu.device(),
-            gpu.queue(),
-            &mut encoder,
-            video,
-            prepared.metadata,
-            &target_view,
-            config.width,
-            config.height,
-        ) {
-            self.prepared = Some(prepared);
-            return TickResult::Fatal(AppError::Render(error));
-        }
-
-        gpu.queue().submit(Some(encoder.finish()));
-        if let Err(error) = self
-            .bridge
-            .signal_consumed_after_submit(gpu, prepared.values)
-        {
-            return TickResult::Fatal(AppError::Gpu(error));
-        }
-        if let Err(error) = self.timeline.advance() {
-            return TickResult::Fatal(AppError::Gpu(error));
-        }
-
-        self.metrics
-            .record_presented(prepared.metadata.frame_id(), lateness);
-        self.held_display_metadata = Some(prepared.metadata);
-        if let Some(ts) = prepared.metadata.timestamp() {
-            self.last_pts = Some(ts);
-        }
-        surface_texture.present();
-        TickResult::Presented
-    }
-
-    fn decode_prepare_next(&mut self, gpu: &GpuContext) -> TickResult {
-        if self.eof {
-            self.decode_calls_after_eof += 1;
-            return TickResult::Finished;
-        }
-
-        loop {
-            let decoded = match self.session.decode_next_d3d11() {
-                Ok(Some(frame)) => frame,
-                Ok(None) => {
-                    self.eof = true;
-                    let wall = self.clock.elapsed_host_us().unwrap_or(MediaTimeUs::ZERO);
-                    let media = match (self.first_pts, self.last_pts) {
-                        (Some(start), Some(end)) => media_duration_between(start, end).ok(),
-                        _ => None,
-                    };
-                    self.clock.mark_ended();
-                    self.metrics.record_eof(media, wall);
-                    return TickResult::Finished;
-                }
-                Err(error) => return TickResult::Fatal(AppError::Decoder(error)),
-            };
-
-            self.metrics.record_decoded();
-            let metadata = decoded.metadata();
-            let elapsed = self.clock.elapsed_host_us().unwrap_or(MediaTimeUs::ZERO);
-
-            let schedule_plan = match self
-                .scheduler
-                .plan_frame(metadata.timestamp(), metadata.frame_id())
-            {
-                Ok(plan) => plan,
-                Err(_) => {
-                    self.metrics.record_rejected_timestamp();
-                    continue;
-                }
-            };
-            let decision = self.scheduler.evaluate_plan(elapsed, schedule_plan);
-            self.metrics.record_scheduled();
-
-            match decision {
-                ScheduleDecision::RejectTimestamp(_) => {
-                    self.metrics.record_rejected_timestamp();
-                    continue;
-                }
-                ScheduleDecision::DropLate { .. } => {
-                    self.metrics.record_dropped_late();
-                    continue;
-                }
-                ScheduleDecision::WaitUntil { .. } | ScheduleDecision::PresentNow { .. } => {
-                    let values = match self.timeline.current() {
-                        Ok(value) => value,
-                        Err(error) => return TickResult::Fatal(AppError::Gpu(error)),
-                    };
-                    let (metadata, surface_ref) = decoded.into_parts();
-                    if let Err(error) = self.bridge.prepare_frame(gpu, surface_ref, values) {
-                        return TickResult::Fatal(AppError::Gpu(error));
-                    }
-                    self.prepared = Some(PreparedFrame {
-                        metadata,
-                        values,
-                        schedule_plan,
-                    });
-                    return TickResult::Waiting;
-                }
-            }
+    /// Returns whether the prepared frame's PTS deadline has been reached.
+    pub fn is_playback_frame_due(&self) -> bool {
+        match self.playback_wakeup_deadline() {
+            Some(deadline) => Instant::now() >= deadline,
+            None => !self.is_waiting_for_prepared_present(),
         }
     }
 
@@ -491,5 +440,183 @@ impl VideoPipeline {
                 .discard_prepared_after_submit(gpu, prepared.values)?;
         }
         Ok(())
+    }
+
+    pub(crate) fn diagnostic_media_position_us(&self) -> Option<i64> {
+        self.clock.current_media_position().map(|value| value.0)
+    }
+
+    pub(crate) fn diagnostic_prepared(&self) -> (bool, Option<u64>, Option<i64>) {
+        match self.prepared.as_ref() {
+            Some(prepared) => (
+                true,
+                Some(prepared.metadata.frame_id().value()),
+                prepared.metadata.timestamp().map(|ts| ts.pts()),
+            ),
+            None => (false, None, None),
+        }
+    }
+
+    pub(crate) fn diagnostic_bridge_state(&self) -> String {
+        if self.prepared.is_some() {
+            if self.bridge.prepared_frame().is_ok() {
+                "prepared".to_string()
+            } else {
+                "prepared_metadata_only".to_string()
+            }
+        } else if self.eof {
+            if self.bridge.consumed_display_frame().is_ok() {
+                "consumed_display".to_string()
+            } else {
+                "eof_no_display".to_string()
+            }
+        } else {
+            "idle".to_string()
+        }
+    }
+
+    pub(crate) fn diagnostic_clock_state(&self) -> dvs_playback::PlaybackState {
+        self.clock.state()
+    }
+
+    pub(crate) fn take_diagnostic_notes(&mut self) -> Vec<PipelineDiagnosticNote> {
+        std::mem::take(&mut self.diagnostic_notes)
+    }
+
+    fn extend_diagnostic_notes(&mut self, notes: Vec<PipelineDiagnosticNote>) {
+        for note in notes {
+            if self.diagnostic_notes.len() >= 32 {
+                break;
+            }
+            self.diagnostic_notes.push(note);
+        }
+    }
+
+    fn decode_prepare_next(&mut self, gpu: &GpuContext) -> DecodePrepareResult {
+        if self.eof {
+            self.decode_calls_after_eof += 1;
+            return DecodePrepareResult::Eof;
+        }
+
+        loop {
+            let mut loop_notes = Vec::new();
+            let decoded = match self.session.decode_next_d3d11() {
+                Ok(Some(frame)) => frame,
+                Ok(None) => {
+                    self.eof = true;
+                    let wall = self.clock.elapsed_host_us().unwrap_or(MediaTimeUs::ZERO);
+                    let media = match (self.first_pts, self.last_pts) {
+                        (Some(start), Some(end)) => media_duration_between(start, end).ok(),
+                        _ => None,
+                    };
+                    self.clock.mark_ended();
+                    self.metrics.record_eof(media, wall);
+                    return DecodePrepareResult::Eof;
+                }
+                Err(error) => return DecodePrepareResult::Failed(AppError::Decoder(error)),
+            };
+
+            self.metrics.record_decoded();
+            let (frame_id, pts, timestamp, frame_id_value) = {
+                let metadata = decoded.metadata();
+                (
+                    metadata.frame_id().value(),
+                    metadata.timestamp().map(|ts| ts.pts()),
+                    metadata.timestamp(),
+                    metadata.frame_id(),
+                )
+            };
+            loop_notes.push(PipelineDiagnosticNote {
+                kind: "frame_decoded".to_string(),
+                extra: format!("frame_id={frame_id} pts={pts:?}"),
+            });
+            let elapsed = self.clock.elapsed_host_us().unwrap_or(MediaTimeUs::ZERO);
+
+            let schedule_plan = match self.scheduler.plan_frame(timestamp, frame_id_value) {
+                Ok(plan) => plan,
+                Err(_) => {
+                    self.metrics.record_rejected_timestamp();
+                    self.extend_diagnostic_notes(loop_notes);
+                    continue;
+                }
+            };
+            let decision = self.scheduler.evaluate_plan(elapsed, schedule_plan);
+            self.metrics.record_scheduled();
+
+            match decision {
+                ScheduleDecision::RejectTimestamp(_) => {
+                    self.metrics.record_rejected_timestamp();
+                    loop_notes.push(PipelineDiagnosticNote {
+                        kind: "frame_classified".to_string(),
+                        extra: format!("Reject frame_id={frame_id}"),
+                    });
+                    self.extend_diagnostic_notes(loop_notes);
+                    continue;
+                }
+                ScheduleDecision::DropLate { lateness } => {
+                    self.metrics.record_dropped_late();
+                    loop_notes.push(PipelineDiagnosticNote {
+                        kind: "frame_classified".to_string(),
+                        extra: format!("DropLate frame_id={frame_id} lateness={lateness:?}"),
+                    });
+                    self.extend_diagnostic_notes(loop_notes);
+                    continue;
+                }
+                ScheduleDecision::WaitUntil { target } => {
+                    let values = match self.timeline.current() {
+                        Ok(value) => value,
+                        Err(error) => return DecodePrepareResult::Failed(AppError::Gpu(error)),
+                    };
+                    let (metadata, surface_ref) = decoded.into_parts();
+                    if let Err(error) = self.bridge.prepare_frame(gpu, surface_ref, values) {
+                        return DecodePrepareResult::Failed(AppError::Gpu(error));
+                    }
+                    let prepared_id = metadata.frame_id().value();
+                    let prepared_pts = metadata.timestamp().map(|ts| ts.pts());
+                    self.prepared = Some(PreparedFrame {
+                        metadata,
+                        values,
+                        schedule_plan,
+                    });
+                    loop_notes.push(PipelineDiagnosticNote {
+                        kind: "frame_prepared".to_string(),
+                        extra: format!("frame_id={prepared_id} pts={prepared_pts:?}"),
+                    });
+                    loop_notes.push(PipelineDiagnosticNote {
+                        kind: "frame_classified".to_string(),
+                        extra: format!("WaitUntil frame_id={prepared_id} target={target:?}"),
+                    });
+                    self.extend_diagnostic_notes(loop_notes);
+                    return DecodePrepareResult::Prepared;
+                }
+                ScheduleDecision::PresentNow { lateness } => {
+                    let values = match self.timeline.current() {
+                        Ok(value) => value,
+                        Err(error) => return DecodePrepareResult::Failed(AppError::Gpu(error)),
+                    };
+                    let (metadata, surface_ref) = decoded.into_parts();
+                    if let Err(error) = self.bridge.prepare_frame(gpu, surface_ref, values) {
+                        return DecodePrepareResult::Failed(AppError::Gpu(error));
+                    }
+                    let prepared_id = metadata.frame_id().value();
+                    let prepared_pts = metadata.timestamp().map(|ts| ts.pts());
+                    self.prepared = Some(PreparedFrame {
+                        metadata,
+                        values,
+                        schedule_plan,
+                    });
+                    loop_notes.push(PipelineDiagnosticNote {
+                        kind: "frame_prepared".to_string(),
+                        extra: format!("frame_id={prepared_id} pts={prepared_pts:?}"),
+                    });
+                    loop_notes.push(PipelineDiagnosticNote {
+                        kind: "frame_classified".to_string(),
+                        extra: format!("PresentNow frame_id={prepared_id} lateness={lateness:?}"),
+                    });
+                    self.extend_diagnostic_notes(loop_notes);
+                    return DecodePrepareResult::Prepared;
+                }
+            }
+        }
     }
 }

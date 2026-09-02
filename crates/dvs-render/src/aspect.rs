@@ -1,6 +1,7 @@
 //! Aspect-preserving viewport fitting (contain / letterbox / pillarbox).
 
 use crate::error::RenderError;
+use crate::physical_rect::PhysicalRenderRect;
 
 /// Pixel-space rectangle for aspect-fit presentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,6 +17,26 @@ pub struct AspectFitRect {
 pub struct AspectFitNdc {
     pub origin: [f32; 2],
     pub extent: [f32; 2],
+}
+
+/// Computes a centered contain-fit rectangle inside a destination sub-rectangle.
+pub fn aspect_fit_rect_in_destination(
+    source_width: u32,
+    source_height: u32,
+    destination: PhysicalRenderRect,
+) -> Result<AspectFitRect, RenderError> {
+    let inner = aspect_fit_rect(
+        source_width,
+        source_height,
+        destination.width,
+        destination.height,
+    )?;
+    Ok(AspectFitRect {
+        x: destination.x + inner.x,
+        y: destination.y + inner.y,
+        width: inner.width,
+        height: inner.height,
+    })
 }
 
 /// Computes a centered contain-fit rectangle inside the target.
@@ -120,5 +141,35 @@ mod tests {
     fn zero_target_rejected() {
         let err = aspect_fit_rect(1920, 1080, 0, 720).unwrap_err();
         assert!(matches!(err, RenderError::InvalidTargetDimensions));
+    }
+
+    #[test]
+    fn aspect_fit_with_non_zero_origin() {
+        let destination = PhysicalRenderRect {
+            x: 240,
+            y: 48,
+            width: 800,
+            height: 450,
+        };
+        let fit = aspect_fit_rect_in_destination(3840, 2160, destination).expect("fit");
+        assert_eq!(fit.x, destination.x);
+        assert_eq!(fit.y, destination.y);
+        assert_eq!(fit.width, destination.width);
+        assert_eq!(fit.height, destination.height);
+    }
+
+    #[test]
+    fn aspect_fit_pillarbox_inside_offset_destination() {
+        let destination = PhysicalRenderRect {
+            x: 100,
+            y: 50,
+            width: 400,
+            height: 400,
+        };
+        let fit = aspect_fit_rect_in_destination(1080, 1920, destination).expect("fit");
+        assert_eq!(fit.height, 400);
+        assert!(fit.width < 400);
+        assert!(fit.x > destination.x);
+        assert_eq!(fit.y, destination.y);
     }
 }
