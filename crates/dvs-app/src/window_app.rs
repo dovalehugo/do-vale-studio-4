@@ -11,9 +11,14 @@ use winit::keyboard::{Key, NamedKey};
 use winit::platform::windows::EventLoopBuilderExtWindows;
 use winit::window::{Window, WindowId};
 
+use dvs_ui::EditorAction;
+
 use crate::config::{AppConfig, RunMode, event_loop_allows_any_thread};
 use crate::display::can_render_display_frame;
-use crate::egui_overlay::EguiStaticOverlay;
+use crate::egui_overlay::{
+    EguiStaticOverlay, is_pointer_ui_event, keyboard_playback_or_exit_ignores_egui_consumed,
+    should_request_ui_interaction_redraw,
+};
 use crate::error::AppError;
 use crate::metrics_summary::format_metrics_summary;
 use crate::shutdown::release_prepared_bridge_frame;
@@ -207,7 +212,10 @@ impl VideoWindowApp {
                     self.request_redraw_if_window_live();
                     break;
                 }
-                TickResult::Presented => continue,
+                TickResult::Presented => {
+                    self.consume_pending_editor_action(event_loop);
+                    continue;
+                }
                 TickResult::SurfaceRetry(error) => {
                     eprintln!("surface retry: {error}");
                     self.update_control_flow(event_loop);
@@ -260,6 +268,7 @@ impl VideoWindowApp {
                         .push((window_size.width, window_size.height, fit));
                     self.advance_smoke_post_eof(event_loop);
                 }
+                self.consume_pending_editor_action(event_loop);
             }
             Err(AppError::Render(error))
                 if matches!(
@@ -389,6 +398,26 @@ impl VideoWindowApp {
         self.drive_playback(event_loop);
         Ok(())
     }
+
+    /// Consumes one pending UI action after a successful present (same gate as SPACE).
+    fn consume_pending_editor_action(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(action) = self
+            .egui
+            .as_mut()
+            .and_then(|egui| egui.take_pending_editor_action())
+        else {
+            return;
+        };
+        match action {
+            EditorAction::StartPlayback => {
+                if self.state == AppState::Ready
+                    && let Err(error) = self.start_playback_once(event_loop)
+                {
+                    self.exit_with_fatal(error, event_loop);
+                }
+            }
+        }
+    }
 }
 
 impl ApplicationHandler for VideoWindowApp {
@@ -443,7 +472,7 @@ impl ApplicationHandler for VideoWindowApp {
                         return;
                     }
                 } else {
-                    println!("Press SPACE to start playback");
+                    println!("Press SPACE or click ▶ Play to start playback");
                 }
 
                 window.request_redraw();
@@ -460,10 +489,20 @@ impl ApplicationHandler for VideoWindowApp {
         _window_id: WindowId,
         event: WindowEvent,
     ) {
-        // Accumulate egui input for the next stable Integration 7 render opportunity.
-        // Intentionally ignore EventResponse::{repaint, consumed} — no egui-driven redraw.
+        // Accumulate egui input. `consumed` is ignored so SPACE/ESC keep working.
+        // Pointer + egui.repaint may request one Ready/Ended redraw (8A.3).
+        let mut egui_consumed = false;
         if let Some(egui) = self.egui.as_mut() {
-            let _ = egui.on_window_event(&event);
+            let response = egui.on_window_event(&event);
+            egui_consumed = response.consumed;
+            let static_ui = matches!(self.state, AppState::Ready | AppState::Ended);
+            if should_request_ui_interaction_redraw(
+                static_ui,
+                is_pointer_ui_event(&event),
+                response.repaint,
+            ) {
+                self.request_redraw_if_window_live();
+            }
         }
 
         match event {
@@ -476,7 +515,9 @@ impl ApplicationHandler for VideoWindowApp {
                         ..
                     },
                 ..
-            } => self.begin_shutdown(event_loop),
+            } if keyboard_playback_or_exit_ignores_egui_consumed(egui_consumed) => {
+                self.begin_shutdown(event_loop)
+            }
             WindowEvent::KeyboardInput {
                 event:
                     KeyEvent {
@@ -485,7 +526,8 @@ impl ApplicationHandler for VideoWindowApp {
                         ..
                     },
                 ..
-            } => {
+            } if keyboard_playback_or_exit_ignores_egui_consumed(egui_consumed) => {
+                // Same path as ▶ Play → consume_pending_editor_action.
                 if self.state == AppState::Ready
                     && let Err(error) = self.start_playback_once(event_loop)
                 {
@@ -507,6 +549,7 @@ impl ApplicationHandler for VideoWindowApp {
                 }
             }
             WindowEvent::RedrawRequested => {
+                // Never request another redraw from RedrawRequested (no egui loop).
                 if self.state == AppState::Playing {
                     self.drive_playback(event_loop);
                 } else if can_render_display_frame(self.state) {

@@ -5,6 +5,20 @@
 
 #![forbid(unsafe_code)]
 
+/// Pure UI intent emitted by the editor shell. Never executes playback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EditorAction {
+    /// Request the host to start PTS playback once (same path as SPACE).
+    StartPlayback,
+}
+
+/// Result of painting one editor-shell frame.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EditorShellOutput {
+    pub program_monitor: LogicalRect,
+    pub action: Option<EditorAction>,
+}
+
 /// Logical (egui points) axis-aligned rectangle.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LogicalRect {
@@ -33,6 +47,16 @@ const PANEL_FILL: egui::Color32 = egui::Color32::from_rgb(28, 28, 30);
 const PANEL_STROKE: egui::Color32 = egui::Color32::from_rgb(55, 55, 58);
 const TITLE_COLOR: egui::Color32 = egui::Color32::from_rgb(210, 210, 214);
 
+/// Maps a Play button click to a pure UI action (no playback side effects).
+pub fn play_button_action(clicked: bool) -> Option<EditorAction> {
+    clicked.then_some(EditorAction::StartPlayback)
+}
+
+/// Consumes a pending editor action exactly once.
+pub fn take_editor_action(pending: &mut Option<EditorAction>) -> Option<EditorAction> {
+    pending.take()
+}
+
 fn opaque_panel_frame() -> egui::Frame {
     egui::Frame::NONE
         .fill(PANEL_FILL)
@@ -45,6 +69,17 @@ fn panel_title(ui: &mut egui::Ui, title: &str) {
         egui::Label::new(egui::RichText::new(title).size(13.0).color(TITLE_COLOR))
             .selectable(false),
     );
+}
+
+fn paint_top_bar(ui: &mut egui::Ui) -> Option<EditorAction> {
+    let mut action = None;
+    ui.horizontal(|ui| {
+        panel_title(ui, "Do Vale Studio 4");
+        if ui.button("▶ Play").clicked() {
+            action = play_button_action(true);
+        }
+    });
+    action
 }
 
 /// Converts a logical egui rect to a physical viewport clamped to the surface.
@@ -103,17 +138,19 @@ pub fn logical_rect_to_physical_viewport(
     }
 }
 
-/// Paints the Integration 8A.2 static editor shell and returns the Program Monitor rect.
+/// Paints the editor shell and returns the Program Monitor rect plus optional UI action.
 ///
-/// Panels are non-interactive labels only. The Program Monitor interior uses a
-/// transparent frame so the NV12 pass remains visible under egui `LoadOp::Load`.
-pub fn paint_editor_shell(ctx: &egui::Context) -> LogicalRect {
+/// Panels keep fixed 8A.2 sizes. The Program Monitor interior stays transparent so the
+/// NV12 pass remains visible under egui `LoadOp::Load`.
+pub fn paint_editor_shell(ctx: &egui::Context) -> EditorShellOutput {
+    let mut action = None;
+
     egui::TopBottomPanel::top("dvs_ui_top_bar")
         .exact_height(TOP_BAR_HEIGHT)
         .resizable(false)
         .frame(opaque_panel_frame())
         .show(ctx, |ui| {
-            panel_title(ui, "Do Vale Studio 4");
+            action = paint_top_bar(ui);
         });
 
     egui::TopBottomPanel::bottom("dvs_ui_timeline")
@@ -168,12 +205,32 @@ pub fn paint_editor_shell(ctx: &egui::Context) -> LogicalRect {
             );
         });
 
-    monitor
+    EditorShellOutput {
+        program_monitor: monitor,
+        action,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn play_button_produces_start_playback() {
+        assert_eq!(play_button_action(true), Some(EditorAction::StartPlayback));
+        assert_eq!(play_button_action(false), None);
+    }
+
+    #[test]
+    fn editor_action_is_consumed_exactly_once() {
+        let mut pending = Some(EditorAction::StartPlayback);
+        assert_eq!(
+            take_editor_action(&mut pending),
+            Some(EditorAction::StartPlayback)
+        );
+        assert_eq!(take_editor_action(&mut pending), None);
+        assert_eq!(take_editor_action(&mut pending), None);
+    }
 
     #[test]
     fn logical_to_physical_clamps_to_surface() {
@@ -228,16 +285,21 @@ mod tests {
             )),
             ..Default::default()
         };
-        let mut monitor = LogicalRect {
-            x: 0.0,
-            y: 0.0,
-            width: 0.0,
-            height: 0.0,
+        let mut output = EditorShellOutput {
+            program_monitor: LogicalRect {
+                x: 0.0,
+                y: 0.0,
+                width: 0.0,
+                height: 0.0,
+            },
+            action: None,
         };
-        let output = ctx.run(raw, |ctx| {
-            monitor = paint_editor_shell(ctx);
+        let full = ctx.run(raw, |ctx| {
+            output = paint_editor_shell(ctx);
         });
-        assert!(!output.shapes.is_empty());
+        assert!(!full.shapes.is_empty());
+        assert!(output.action.is_none());
+        let monitor = output.program_monitor;
         assert!(monitor.width > 0.0);
         assert!(monitor.height > 0.0);
         assert!(monitor.x >= MEDIA_POOL_WIDTH - 1.0);
@@ -248,6 +310,58 @@ mod tests {
         assert!(vp.height > 0);
         assert!(vp.x + vp.width <= 1280);
         assert!(vp.y + vp.height <= 720);
+    }
+
+    #[test]
+    fn play_button_click_emits_start_playback_action() {
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1280.0, 720.0));
+
+        // Layout pass so widgets exist.
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                ..Default::default()
+            },
+            |ctx| {
+                let _ = paint_editor_shell(ctx);
+            },
+        );
+
+        // Click near the expected Play control in the top bar (title + button).
+        let click_pos = egui::pos2(150.0, 14.0);
+        let press = egui::RawInput {
+            screen_rect: Some(screen),
+            events: vec![
+                egui::Event::PointerMoved(click_pos),
+                egui::Event::PointerButton {
+                    pos: click_pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::default(),
+                },
+            ],
+            ..Default::default()
+        };
+        let _ = ctx.run(press, |ctx| {
+            let _ = paint_editor_shell(ctx);
+        });
+
+        let release = egui::RawInput {
+            screen_rect: Some(screen),
+            events: vec![egui::Event::PointerButton {
+                pos: click_pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::default(),
+            }],
+            ..Default::default()
+        };
+        let mut action = None;
+        let _ = ctx.run(release, |ctx| {
+            action = paint_editor_shell(ctx).action;
+        });
+        assert_eq!(action, Some(EditorAction::StartPlayback));
     }
 
     #[test]
@@ -268,7 +382,7 @@ mod tests {
                 height: 0.0,
             };
             let _ = ctx.run(raw, |ctx| {
-                monitor = paint_editor_shell(ctx);
+                monitor = paint_editor_shell(ctx).program_monitor;
             });
             let vp = logical_rect_to_physical_viewport(monitor, 1.0, w as u32, h as u32);
             // Even when side panels consume most width, conversion must not panic
