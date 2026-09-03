@@ -19,6 +19,7 @@ use dvs_render::{
 };
 use winit::dpi::PhysicalSize;
 
+use crate::egui_overlay::EguiStaticOverlay;
 use crate::error::AppError;
 
 struct PreparedFrame {
@@ -232,10 +233,14 @@ impl VideoPipeline {
     ///
     /// Uses the prepared bridge frame in `Ready`, or the held last-presented frame in
     /// `Ended` after the bridge slot was consumed.
+    ///
+    /// When `overlay` is provided, egui is encoded onto the same surface texture after
+    /// NV12 and before the single submit/present (Integration 8A.1).
     pub fn render_current_display_frame(
         &mut self,
         gpu: &GpuContext,
         surface: &RenderSurface,
+        overlay: Option<&mut EguiStaticOverlay>,
     ) -> Result<AspectFitRect, AppError> {
         if surface.configuration().width == 0 || surface.configuration().height == 0 {
             return Err(AppError::Render(
@@ -280,6 +285,16 @@ impl VideoPipeline {
             config.width,
             config.height,
         )?;
+        if let Some(overlay) = overlay {
+            overlay.encode_after_video(
+                gpu.device(),
+                gpu.queue(),
+                &mut encoder,
+                &target_view,
+                config.width,
+                config.height,
+            )?;
+        }
         gpu.queue().submit(Some(encoder.finish()));
         surface_texture.present();
         Ok(fit)
@@ -307,6 +322,7 @@ impl VideoPipeline {
         gpu: &GpuContext,
         surface: &RenderSurface,
         window_size: PhysicalSize<u32>,
+        overlay: Option<&mut EguiStaticOverlay>,
     ) -> TickResult {
         if !self.playback_started {
             return TickResult::Idle;
@@ -330,7 +346,7 @@ impl VideoPipeline {
                     return TickResult::Waiting;
                 }
                 ScheduleDecision::PresentNow { lateness } => {
-                    return self.present_prepared(gpu, surface, lateness);
+                    return self.present_prepared(gpu, surface, lateness, overlay);
                 }
                 ScheduleDecision::DropLate { .. } | ScheduleDecision::RejectTimestamp(_) => {
                     return TickResult::Fatal(AppError::Fatal(
@@ -352,6 +368,7 @@ impl VideoPipeline {
         gpu: &GpuContext,
         surface: &RenderSurface,
         lateness: MediaTimeUs,
+        overlay: Option<&mut EguiStaticOverlay>,
     ) -> TickResult {
         let prepared = match self.prepared.take() {
             Some(value) => value,
@@ -390,6 +407,20 @@ impl VideoPipeline {
         ) {
             self.prepared = Some(prepared);
             return TickResult::Fatal(AppError::Render(error));
+        }
+
+        if let Some(overlay) = overlay
+            && let Err(error) = overlay.encode_after_video(
+                gpu.device(),
+                gpu.queue(),
+                &mut encoder,
+                &target_view,
+                config.width,
+                config.height,
+            )
+        {
+            self.prepared = Some(prepared);
+            return TickResult::Fatal(error);
         }
 
         gpu.queue().submit(Some(encoder.finish()));

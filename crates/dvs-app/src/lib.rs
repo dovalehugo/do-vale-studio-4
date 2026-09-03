@@ -11,6 +11,8 @@ mod shutdown;
 mod state;
 
 #[cfg(target_os = "windows")]
+mod egui_overlay;
+#[cfg(target_os = "windows")]
 mod window_app;
 #[cfg(target_os = "windows")]
 mod windows;

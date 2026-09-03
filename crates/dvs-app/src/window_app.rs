@@ -13,6 +13,7 @@ use winit::window::{Window, WindowId};
 
 use crate::config::{AppConfig, RunMode, event_loop_allows_any_thread};
 use crate::display::can_render_display_frame;
+use crate::egui_overlay::EguiStaticOverlay;
 use crate::error::AppError;
 use crate::metrics_summary::format_metrics_summary;
 use crate::shutdown::release_prepared_bridge_frame;
@@ -59,16 +60,19 @@ enum SmokePostEofPhase {
 /// # Drop order
 ///
 /// Rust drops struct fields in declaration order. `pipeline` is declared before
-/// `surface` and `gpu` so decode/bridge teardown runs while the presentation device
-/// remains available if explicit shutdown did not already release prepared resources.
-/// `gpu` holds `Arc<dyn SurfaceWindowTarget>` and therefore keeps the window target
-/// alive after the optional `window` field is dropped.
+/// `egui`, `surface`, and `gpu` so decode/bridge teardown runs while the presentation
+/// device remains available if explicit shutdown did not already release prepared
+/// resources. `egui` drops before `surface`/`gpu` so the egui-wgpu renderer releases
+/// GPU resources while the device is still alive. `gpu` holds
+/// `Arc<dyn SurfaceWindowTarget>` and therefore keeps the window target alive after
+/// the optional `window` field is dropped.
 struct VideoWindowApp {
     config: AppConfig,
     state: AppState,
     state_log: Vec<AppState>,
     window: Option<Arc<Window>>,
     pipeline: Option<VideoPipeline>,
+    egui: Option<EguiStaticOverlay>,
     surface: Option<dvs_render::RenderSurface>,
     gpu: Option<dvs_gpu::GpuContext>,
     fatal_error: Option<AppError>,
@@ -85,6 +89,7 @@ impl VideoWindowApp {
             state_log: vec![AppState::Initializing],
             window: None,
             pipeline: None,
+            egui: None,
             surface: None,
             gpu: None,
             fatal_error: None,
@@ -176,18 +181,12 @@ impl VideoWindowApp {
     }
 
     fn drive_playback(&mut self, event_loop: &ActiveEventLoop) {
-        let Some(pipeline) = self.pipeline.as_mut() else {
-            return;
-        };
-        if self.state != AppState::Playing {
+        if self.pipeline.is_none() || self.state != AppState::Playing {
             return;
         }
-        let Some(gpu) = self.gpu.as_ref() else {
+        if self.gpu.is_none() || self.surface.is_none() {
             return;
-        };
-        let Some(surface) = self.surface.as_ref() else {
-            return;
-        };
+        }
         let size = self
             .window
             .as_ref()
@@ -195,7 +194,14 @@ impl VideoWindowApp {
             .unwrap_or_default();
 
         loop {
-            match pipeline.tick(gpu, surface, size) {
+            let tick = {
+                let gpu = self.gpu.as_ref().expect("gpu checked");
+                let surface = self.surface.as_ref().expect("surface checked");
+                let overlay = self.egui.as_mut();
+                let pipeline = self.pipeline.as_mut().expect("pipeline checked");
+                pipeline.tick(gpu, surface, size, overlay)
+            };
+            match tick {
                 TickResult::Idle | TickResult::Waiting => {
                     self.update_control_flow(event_loop);
                     self.request_redraw_if_window_live();
@@ -223,15 +229,9 @@ impl VideoWindowApp {
         if !can_render_display_frame(self.state) {
             return;
         }
-        let Some(gpu) = self.gpu.as_ref() else {
+        if self.gpu.is_none() || self.surface.is_none() || self.pipeline.is_none() {
             return;
-        };
-        let Some(surface) = self.surface.as_ref() else {
-            return;
-        };
-        let Some(pipeline) = self.pipeline.as_mut() else {
-            return;
-        };
+        }
 
         let window_size = self
             .window
@@ -242,7 +242,15 @@ impl VideoWindowApp {
             return;
         }
 
-        match pipeline.render_current_display_frame(gpu, surface) {
+        let render_result = {
+            let gpu = self.gpu.as_ref().expect("gpu checked");
+            let surface = self.surface.as_ref().expect("surface checked");
+            let overlay = self.egui.as_mut();
+            let pipeline = self.pipeline.as_mut().expect("pipeline checked");
+            pipeline.render_current_display_frame(gpu, surface, overlay)
+        };
+
+        match render_result {
             Ok(fit) => {
                 if matches!(
                     self.smoke_post_eof,
@@ -411,8 +419,14 @@ impl ApplicationHandler for VideoWindowApp {
 
         match init_result {
             Ok((gpu, surface, pipeline)) => {
+                let egui = EguiStaticOverlay::new(
+                    window.clone(),
+                    gpu.device(),
+                    surface.configuration().format,
+                );
                 self.window = Some(window.clone());
                 self.pipeline = Some(pipeline);
+                self.egui = Some(egui);
                 self.surface = Some(surface);
                 self.gpu = Some(gpu);
                 match self.state.ready() {
@@ -446,6 +460,12 @@ impl ApplicationHandler for VideoWindowApp {
         _window_id: WindowId,
         event: WindowEvent,
     ) {
+        // Accumulate egui input for the next stable Integration 7 render opportunity.
+        // Intentionally ignore EventResponse::{repaint, consumed} — no egui-driven redraw.
+        if let Some(egui) = self.egui.as_mut() {
+            let _ = egui.on_window_event(&event);
+        }
+
         match event {
             WindowEvent::CloseRequested => self.begin_shutdown(event_loop),
             WindowEvent::KeyboardInput {
