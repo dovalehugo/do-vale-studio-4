@@ -13,7 +13,32 @@ use wgpu::{
 use dvs_gpu::{GpuVideoFrame, GpuVideoPixelFormat, create_nv12_plane_views};
 use dvs_media::VideoFrameMetadata;
 
-use crate::aspect::aspect_fit_rect;
+use crate::aspect::{AspectFitRect, aspect_fit_rect};
+
+fn clamp_destination_to_surface(
+    destination: AspectFitRect,
+    target_width: u32,
+    target_height: u32,
+) -> AspectFitRect {
+    if target_width == 0 || target_height == 0 {
+        return AspectFitRect {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+        };
+    }
+    let x = destination.x.min(target_width);
+    let y = destination.y.min(target_height);
+    let max_w = target_width.saturating_sub(x);
+    let max_h = target_height.saturating_sub(y);
+    AspectFitRect {
+        x,
+        y,
+        width: destination.width.min(max_w),
+        height: destination.height.min(max_h),
+    }
+}
 use crate::color::coefficients_from_color_info;
 use crate::crop::normalized_visible_uv;
 use crate::error::RenderError;
@@ -179,7 +204,7 @@ impl Nv12Renderer {
         self.target_format
     }
 
-    /// Encodes one NV12 render pass into the caller's command encoder.
+    /// Encodes one NV12 render pass into the full target surface.
     #[allow(clippy::too_many_arguments)]
     pub fn encode_frame(
         &mut self,
@@ -192,6 +217,43 @@ impl Nv12Renderer {
         target_width: u32,
         target_height: u32,
     ) -> Result<(), RenderError> {
+        self.encode_frame_in_region(
+            device,
+            queue,
+            encoder,
+            frame,
+            metadata,
+            target,
+            target_width,
+            target_height,
+            AspectFitRect {
+                x: 0,
+                y: 0,
+                width: target_width,
+                height: target_height,
+            },
+        )
+        .map(|_| ())
+    }
+
+    /// Encodes one NV12 pass aspect-fitted inside `destination` (surface pixels).
+    ///
+    /// Returns the absolute surface-space rectangle used for viewport/scissor.
+    /// The destination region is clamped to the target surface. A zero-sized
+    /// destination skips drawing and returns the empty clamped region.
+    #[allow(clippy::too_many_arguments)]
+    pub fn encode_frame_in_region(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        encoder: &mut CommandEncoder,
+        frame: &GpuVideoFrame,
+        metadata: VideoFrameMetadata,
+        target: &TextureView,
+        target_width: u32,
+        target_height: u32,
+        destination: AspectFitRect,
+    ) -> Result<AspectFitRect, RenderError> {
         if frame.pixel_format() != GpuVideoPixelFormat::Nv12 {
             return Err(RenderError::UnsupportedPixelFormat);
         }
@@ -199,15 +261,42 @@ impl Nv12Renderer {
             return Err(RenderError::InvalidTargetDimensions);
         }
 
+        let region = clamp_destination_to_surface(destination, target_width, target_height);
+        if region.width == 0 || region.height == 0 {
+            // Still clear the surface so prior contents do not leak.
+            let _ = encoder.begin_render_pass(&RenderPassDescriptor {
+                label: Some("dvs-render-nv12-clear"),
+                color_attachments: &[Some(RenderPassColorAttachment {
+                    view: target,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: Operations {
+                        load: LoadOp::Clear(Color::BLACK),
+                        store: StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            return Ok(region);
+        }
+
         let crop = normalized_visible_uv(&metadata)?;
         let coeffs = coefficients_from_color_info(metadata.color())?;
         let visible = metadata.dimensions().visible();
-        let fit = aspect_fit_rect(
+        let local_fit = aspect_fit_rect(
             visible.width(),
             visible.height(),
-            target_width,
-            target_height,
+            region.width,
+            region.height,
         )?;
+        let fit = AspectFitRect {
+            x: region.x + local_fit.x,
+            y: region.y + local_fit.y,
+            width: local_fit.width,
+            height: local_fit.height,
+        };
         let uniforms = Nv12RenderUniforms::new(crop, coeffs);
 
         self.ensure_bind_group(device, frame)?;
@@ -249,7 +338,7 @@ impl Nv12Renderer {
             pass.draw(0..DRAW_VERTEX_COUNT, 0..1);
         }
 
-        Ok(())
+        Ok(fit)
     }
 
     fn ensure_bind_group(

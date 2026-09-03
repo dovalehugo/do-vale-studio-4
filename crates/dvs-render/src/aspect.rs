@@ -121,4 +121,20 @@ mod tests {
         let err = aspect_fit_rect(1920, 1080, 0, 720).unwrap_err();
         assert!(matches!(err, RenderError::InvalidTargetDimensions));
     }
+
+    #[test]
+    fn aspect_fit_inside_offset_region_preserves_ratio() {
+        let region_w = 800;
+        let region_h = 450;
+        let fit = aspect_fit_rect(3840, 2160, region_w, region_h).expect("fit");
+        assert_eq!(fit.width, region_w);
+        assert_eq!(fit.height, region_h);
+        let absolute = AspectFitRect {
+            x: 220 + fit.x,
+            y: 28 + fit.y,
+            width: fit.width,
+            height: fit.height,
+        };
+        assert!((absolute.width as f32 / absolute.height as f32 - 3840.0 / 2160.0).abs() < 1e-5);
+    }
 }
