@@ -1,4 +1,4 @@
-//! Minimal egui overlay for Integration 8A.3.
+//! Minimal egui overlay for Integration 8A.4.
 //!
 //! Owns egui context / winit state / wgpu renderer only. Does not own the
 //! window event loop, surface, decoder, bridge, or playback scheduler.
@@ -12,8 +12,8 @@
 use std::sync::Arc;
 
 use dvs_ui::{
-    EditorAction, PhysicalViewport, logical_rect_to_physical_viewport, paint_editor_shell,
-    take_editor_action,
+    EditorAction, PhysicalViewport, apply_editor_theme, logical_rect_to_physical_viewport,
+    paint_editor_shell, take_editor_action,
 };
 use egui::epaint::ClippedPrimitive;
 use egui_wgpu::{Renderer, RendererOptions, ScreenDescriptor};
@@ -83,6 +83,7 @@ impl EguiStaticOverlay {
         output_format: wgpu::TextureFormat,
     ) -> Self {
         let context = egui::Context::default();
+        apply_editor_theme(&context);
         let max_texture_side = device.limits().max_texture_dimension_2d as usize;
         let state = EguiWinitState::new(
             context.clone(),
