@@ -16,16 +16,20 @@ dvs-gpu.workspace = true
 dvs-media.workspace = true
 dvs-playback.workspace = true
 dvs-render.workspace = true
+dvs-ui.workspace = true
 thiserror.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 pollster = "0.4"
-winit = "0.30"
+winit.workspace = true
 wgpu.workspace = true
+egui.workspace = true
+egui-wgpu.workspace = true
+egui-winit.workspace = true
 
 [target.'cfg(windows)'.dev-dependencies]
 pollster = "0.4"
-winit = "0.30"
+winit.workspace = true
 
 [[test]]
 name = "windows_app_smoke"
