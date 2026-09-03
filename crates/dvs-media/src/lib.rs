@@ -1,12 +1,14 @@
-//! Platform-independent video frame metadata value types.
+//! Platform-independent media value types.
 //!
-//! `dvs-media` provides validated metadata contracts for decoded video frames.
-//! Types here contain no FFmpeg identifiers, no GPU handles, no Windows/COM types,
-//! and no raw pixel buffers. Allocation dimensions may include decoder alignment
-//! padding; visible dimensions describe the displayable crop.
+//! `dvs-media` provides validated metadata contracts for decoded video frames
+//! and a pure [`MediaAsset`] source record. Types here contain no FFmpeg
+//! identifiers, no GPU handles, no Windows/COM types, and no raw pixel buffers.
+//! Allocation dimensions may include decoder alignment padding; visible
+//! dimensions describe the displayable crop.
 
 #![forbid(unsafe_code)]
 
+mod asset;
 mod color;
 mod dimensions;
 mod error;
@@ -14,6 +16,7 @@ mod metadata;
 mod pixel_format;
 mod time;
 
+pub use asset::{MediaAsset, MediaAssetError};
 pub use color::{ColorMatrix, ColorPrimaries, ColorRange, TransferCharacteristic, VideoColorInfo};
 pub use dimensions::{Extent2D, VideoDimensions, VisibleRect};
 pub use error::MetadataError;
@@ -43,6 +46,8 @@ mod send_sync {
         assert_send_sync::<MediaTimestamp>();
         assert_send_sync::<VideoFrameMetadata>();
         assert_send_sync::<MetadataError>();
+        assert_send_sync::<MediaAsset>();
+        assert_send_sync::<MediaAssetError>();
     };
 
     #[test]
@@ -72,5 +77,10 @@ mod send_sync {
             VideoColorInfo::bt709_limited(),
         ));
         assert_values(MetadataError::ZeroWidth);
+        assert_values(
+            MediaAsset::new(dvs_core::MediaAssetId::new(1).expect("id"), "clip.mp4")
+                .expect("asset"),
+        );
+        assert_values(MediaAssetError::EmptySourcePath);
     }
 }
